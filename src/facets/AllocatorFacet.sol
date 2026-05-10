@@ -19,14 +19,21 @@ contract AllocatorFacet {
     error StrategyNotRegistered(bytes32 strategyId);
     error AllocationLengthMismatch(uint256 idsLength, uint256 bpsLength);
     error AllocationExceedsBudget(uint16 totalBps, uint16 maxBps);
+    error AllocationExceedsCap(bytes32 strategyId, uint16 capBps, uint16 attemptedBps);
     error InvalidBps(uint16 bps);
     error EmptySelector();
     error StrategyTotalAssetsCallFailed(bytes32 strategyId);
+    error StrategyCallFailed(bytes32 strategyId, bytes4 selector);
+    error RebalanceTooSoon(uint256 lastBlock, uint256 currentBlock);
 
     event StrategyRegistered(bytes32 indexed strategyId, LibAllocator.StrategyConfig config);
     event StrategyRemoved(bytes32 indexed strategyId);
     event AllocationSet(bytes32[] strategyIds, uint16[] bps);
     event IdleReserveSet(uint16 bps);
+    event StrategyCapSet(bytes32 indexed strategyId, uint16 capBps);
+    event GlobalStrategyCapSet(uint16 capBps);
+    event Rebalanced(uint256 totalAssets, uint256 idleAfter);
+    event StrategyHarvested(bytes32 indexed strategyId);
 
     // -----------------------------------------------------------------------
     // Curator-gated setters
@@ -90,6 +97,8 @@ contract AllocatorFacet {
             uint16 b = bps[i];
             if (!s.configs[id].active) revert StrategyNotRegistered(id);
             if (b > LibAllocator.BPS_DENOMINATOR) revert InvalidBps(b);
+            uint16 cap = _effectiveCap(s, id);
+            if (b > cap) revert AllocationExceedsCap(id, cap, b);
             s.targetBps[id] = b;
             total += b;
         }
@@ -103,6 +112,81 @@ contract AllocatorFacet {
         if (bps > LibAllocator.BPS_DENOMINATOR) revert InvalidBps(bps);
         LibAllocator.allocatorStorage().idleReserveBps = bps;
         emit IdleReserveSet(bps);
+    }
+
+    function setStrategyCap(bytes32 strategyId, uint16 capBps) external {
+        LibDiamond.enforceIsContractOwner();
+        if (capBps > LibAllocator.BPS_DENOMINATOR) revert InvalidBps(capBps);
+        LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
+        if (!s.configs[strategyId].active) revert StrategyNotRegistered(strategyId);
+        s.configs[strategyId].capBps = capBps;
+        emit StrategyCapSet(strategyId, capBps);
+    }
+
+    function setGlobalStrategyCap(uint16 capBps) external {
+        LibDiamond.enforceIsContractOwner();
+        if (capBps > LibAllocator.BPS_DENOMINATOR) revert InvalidBps(capBps);
+        LibAllocator.allocatorStorage().globalMaxStrategyCapBps = capBps;
+        emit GlobalStrategyCapSet(capBps);
+    }
+
+    // -----------------------------------------------------------------------
+    // Rebalance
+    // -----------------------------------------------------------------------
+
+    /// @notice Brings each strategy's holdings to its target allocation.
+    /// @dev Two passes: withdraw from over-allocated strategies first to free
+    ///      idle balance, then deposit into under-allocated ones. The per-strategy
+    ///      cap is enforced upstream in `setAllocation`; the idle-reserve floor
+    ///      follows automatically from `total + idleReserveBps ≤ 10_000`.
+    function rebalance() external {
+        LibDiamond.enforceIsContractOwner();
+        LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
+        if (block.number <= uint256(s.lastRebalanceBlock)) {
+            revert RebalanceTooSoon(uint256(s.lastRebalanceBlock), block.number);
+        }
+        s.lastRebalanceBlock = uint64(block.number);
+
+        uint256 n = s.strategyIds.length;
+        uint256[] memory currentAssets = new uint256[](n);
+        uint256 totalCached = _idleAssetsInternal();
+        for (uint256 i; i < n; i++) {
+            uint256 cur = _strategyTotalAssetsInternal(s.configs[s.strategyIds[i]], s.strategyIds[i]);
+            currentAssets[i] = cur;
+            totalCached += cur;
+        }
+
+        // Pass 1: withdraw from over-target strategies.
+        for (uint256 i; i < n; i++) {
+            bytes32 id = s.strategyIds[i];
+            uint256 target = (totalCached * uint256(s.targetBps[id])) / LibAllocator.BPS_DENOMINATOR;
+            if (currentAssets[i] > target) {
+                uint256 delta = currentAssets[i] - target;
+                _dispatchStrategyCall(id, s.configs[id].withdrawSelector, delta);
+            }
+        }
+
+        // Pass 2: deposit into under-target strategies.
+        for (uint256 i; i < n; i++) {
+            bytes32 id = s.strategyIds[i];
+            uint256 target = (totalCached * uint256(s.targetBps[id])) / LibAllocator.BPS_DENOMINATOR;
+            if (currentAssets[i] < target) {
+                uint256 delta = target - currentAssets[i];
+                _dispatchStrategyCall(id, s.configs[id].depositSelector, delta);
+            }
+        }
+
+        emit Rebalanced(totalCached, _idleAssetsInternal());
+    }
+
+    function harvest(bytes32 strategyId) external {
+        LibDiamond.enforceIsContractOwner();
+        LibAllocator.StrategyConfig memory cfg = LibAllocator.allocatorStorage().configs[strategyId];
+        if (!cfg.active) revert StrategyNotRegistered(strategyId);
+        if (cfg.harvestSelector != bytes4(0)) {
+            _dispatchStrategyCall(strategyId, cfg.harvestSelector, 0);
+        }
+        emit StrategyHarvested(strategyId);
     }
 
     // -----------------------------------------------------------------------
@@ -138,7 +222,69 @@ contract AllocatorFacet {
 
     /// @notice Asset balance currently sitting idle in the vault.
     function idleAssets() external view returns (uint256) {
+        return _idleAssetsInternal();
+    }
+
+    function strategyCap(bytes32 strategyId) external view returns (uint16) {
+        return _effectiveCap(LibAllocator.allocatorStorage(), strategyId);
+    }
+
+    function globalStrategyCap() external view returns (uint16) {
+        return LibAllocator.allocatorStorage().globalMaxStrategyCapBps;
+    }
+
+    function lastRebalanceBlock() external view returns (uint64) {
+        return LibAllocator.allocatorStorage().lastRebalanceBlock;
+    }
+
+    // -----------------------------------------------------------------------
+    // Internals
+    // -----------------------------------------------------------------------
+
+    function _idleAssetsInternal() internal view returns (uint256) {
         address asset = IERC4626(address(this)).asset();
         return IERC20(asset).balanceOf(address(this));
+    }
+
+    function _strategyTotalAssetsInternal(LibAllocator.StrategyConfig memory cfg, bytes32 strategyId)
+        internal
+        view
+        returns (uint256)
+    {
+        (bool ok, bytes memory data) = address(this).staticcall(abi.encodeWithSelector(cfg.totalAssetsSelector));
+        if (!ok) revert StrategyTotalAssetsCallFailed(strategyId);
+        return abi.decode(data, (uint256));
+    }
+
+    function _dispatchStrategyCall(bytes32 strategyId, bytes4 selector, uint256 amount) internal {
+        if (selector == bytes4(0)) revert EmptySelector();
+        bytes memory data;
+        if (amount == 0) {
+            data = abi.encodeWithSelector(selector);
+        } else {
+            data = abi.encodeWithSelector(selector, amount);
+        }
+        (bool ok, bytes memory ret) = address(this).call(data);
+        if (!ok) {
+            if (ret.length > 0) {
+                assembly {
+                    revert(add(32, ret), mload(ret))
+                }
+            }
+            revert StrategyCallFailed(strategyId, selector);
+        }
+    }
+
+    function _effectiveCap(LibAllocator.AllocatorStorage storage s, bytes32 strategyId)
+        internal
+        view
+        returns (uint16)
+    {
+        uint16 perStrategy = s.configs[strategyId].capBps;
+        uint16 glob = s.globalMaxStrategyCapBps;
+        if (perStrategy == 0 && glob == 0) return LibAllocator.BPS_DENOMINATOR;
+        if (perStrategy == 0) return glob;
+        if (glob == 0) return perStrategy;
+        return perStrategy < glob ? perStrategy : glob;
     }
 }
