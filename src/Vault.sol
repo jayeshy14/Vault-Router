@@ -8,12 +8,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IDiamond} from "./interfaces/IDiamond.sol";
 import {LibDiamond} from "./libraries/LibDiamond.sol";
 
-/// @title vault-router — modular ERC-4626 vault on the EIP-2535 Diamond pattern.
+/// @title Vault Router — modular ERC-4626 vault on the EIP-2535 Diamond pattern.
 /// @notice Vault.sol owns the ERC-4626 surface (deposit/withdraw/totalAssets) and
 ///         acts as the Diamond proxy. Strategy logic, allocation policy, and
 ///         harvesting live in facets attached via diamondCut.
-/// @dev Inflation-attack mitigation comes from OZ ERC-4626's `_decimalsOffset`
-///      virtual shares, not the literal 1-wei dead-deposit pattern.
+/// @dev Inflation attack mitigation comes from OZ ERC-4626's `_decimalsOffset`
+///      virtual shares, not the literal 1 wei dead deposit pattern.
 contract Vault is ERC4626 {
     error UnknownSelector(bytes4 selector);
 
@@ -31,13 +31,11 @@ contract Vault is ERC4626 {
     }
 
     /// @dev 6 decimals of virtual shares — OZ's recommended inflation-attack
-    ///      mitigation for ERC-4626 vaults. See:
-    ///      https://blog.openzeppelin.com/a-novel-defense-against-erc4626-inflation-attacks
+    ///      mitigation for ERC-4626 vaults.
     function _decimalsOffset() internal pure override returns (uint8) {
         return 6;
     }
 
-    /// @notice Diamond fallback. Routes any unrecognised selector to its facet.
     fallback() external payable {
         LibDiamond.DiamondStorage storage ds;
         bytes32 position = LibDiamond.DIAMOND_STORAGE_POSITION;
