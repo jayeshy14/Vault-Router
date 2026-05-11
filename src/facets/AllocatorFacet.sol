@@ -33,7 +33,6 @@ contract AllocatorFacet {
     event StrategyCapSet(bytes32 indexed strategyId, uint16 capBps);
     event GlobalStrategyCapSet(uint16 capBps);
     event Rebalanced(uint256 totalAssets, uint256 idleAfter);
-    event StrategyHarvested(bytes32 indexed strategyId);
 
     // -----------------------------------------------------------------------
     // Curator-gated setters
@@ -177,16 +176,6 @@ contract AllocatorFacet {
         }
 
         emit Rebalanced(totalCached, _idleAssetsInternal());
-    }
-
-    function harvest(bytes32 strategyId) external {
-        LibDiamond.enforceIsContractOwner();
-        LibAllocator.StrategyConfig memory cfg = LibAllocator.allocatorStorage().configs[strategyId];
-        if (!cfg.active) revert StrategyNotRegistered(strategyId);
-        if (cfg.harvestSelector != bytes4(0)) {
-            _dispatchStrategyCall(strategyId, cfg.harvestSelector, 0);
-        }
-        emit StrategyHarvested(strategyId);
     }
 
     // -----------------------------------------------------------------------

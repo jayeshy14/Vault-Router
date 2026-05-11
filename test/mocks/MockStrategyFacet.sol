@@ -17,6 +17,7 @@ contract MockStrategyFacet {
 
     struct MockStorage {
         MockProtocol protocol;
+        uint256 harvestCount;
     }
 
     function _ms() internal pure returns (MockStorage storage s) {
@@ -51,5 +52,11 @@ contract MockStrategyFacet {
         _ms().protocol.withdraw(amount);
     }
 
-    function mockHarvest() external {}
+    function mockHarvest() external {
+        _ms().harvestCount += 1;
+    }
+
+    function mockHarvestCount() external view returns (uint256) {
+        return _ms().harvestCount;
+    }
 }

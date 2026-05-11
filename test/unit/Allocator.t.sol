@@ -310,7 +310,7 @@ contract AllocatorTest is Test {
     }
 
     function _allocatorSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](14);
+        s = new bytes4[](13);
         s[0] = AllocatorFacet.registerStrategy.selector;
         s[1] = AllocatorFacet.removeStrategy.selector;
         s[2] = AllocatorFacet.setAllocation.selector;
@@ -318,13 +318,12 @@ contract AllocatorTest is Test {
         s[4] = AllocatorFacet.setStrategyCap.selector;
         s[5] = AllocatorFacet.setGlobalStrategyCap.selector;
         s[6] = AllocatorFacet.rebalance.selector;
-        s[7] = AllocatorFacet.harvest.selector;
-        s[8] = AllocatorFacet.strategies.selector;
-        s[9] = AllocatorFacet.strategyConfig.selector;
-        s[10] = AllocatorFacet.targetAllocation.selector;
-        s[11] = AllocatorFacet.idleReserveBps.selector;
-        s[12] = AllocatorFacet.strategyTotalAssets.selector;
-        s[13] = AllocatorFacet.idleAssets.selector;
+        s[7] = AllocatorFacet.strategies.selector;
+        s[8] = AllocatorFacet.strategyConfig.selector;
+        s[9] = AllocatorFacet.targetAllocation.selector;
+        s[10] = AllocatorFacet.idleReserveBps.selector;
+        s[11] = AllocatorFacet.strategyTotalAssets.selector;
+        s[12] = AllocatorFacet.idleAssets.selector;
     }
 
     function _mockSelectors() internal pure returns (bytes4[] memory s) {
