@@ -178,6 +178,23 @@ contract AllocatorTest is Test {
         vm.stopPrank();
     }
 
+    function test_VaultTotalAssets_SumsIdleAndStrategyPositions() public {
+        _depositToVault(alice, 1_000 * 1e6);
+
+        // Before rebalance, all 1_000 sits idle in the vault.
+        assertEq(vault.totalAssets(), 1_000 * 1e6, "all idle before rebalance");
+
+        _setSingleAllocation(MOCK_ID, 7_000);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
+
+        // After: 300 idle + 700 in mock protocol = 1_000 reported.
+        assertEq(usdc.balanceOf(address(vault)), 300 * 1e6, "idle = 30%");
+        assertEq(mockProtocol.balanceOf(address(vault)), 700 * 1e6, "deployed = 70%");
+        assertEq(vault.totalAssets(), 1_000 * 1e6, "totalAssets unchanged across rebalance");
+    }
+
     function test_StrategyTotalAssets_ReadsViaFallback() public {
         _depositToVault(alice, 1_000 * 1e6);
         _setSingleAllocation(MOCK_ID, 5_000);

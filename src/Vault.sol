@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {IDiamond} from "./interfaces/IDiamond.sol";
 import {LibDiamond} from "./libraries/LibDiamond.sol";
+import {LibAllocator} from "./libraries/LibAllocator.sol";
 
 /// @title Vault Router — modular ERC-4626 vault on the EIP-2535 Diamond pattern.
 /// @notice Vault.sol owns the ERC-4626 surface (deposit/withdraw/totalAssets) and
@@ -16,6 +17,7 @@ import {LibDiamond} from "./libraries/LibDiamond.sol";
 ///      virtual shares, not the literal 1 wei dead deposit pattern.
 contract Vault is ERC4626 {
     error UnknownSelector(bytes4 selector);
+    error StrategyTotalAssetsCallFailed(bytes32 strategyId);
 
     constructor(
         IERC20 asset_,
@@ -34,6 +36,27 @@ contract Vault is ERC4626 {
     ///      mitigation for ERC-4626 vaults.
     function _decimalsOffset() internal pure override returns (uint8) {
         return 6;
+    }
+
+    /// @notice Total assets under management = idle vault balance + sum of every
+    ///         registered strategy's reported position.
+    /// @dev Self-staticcalls each strategy's totalAssets selector via the diamond
+    ///      fallback. When no strategies are registered the result equals the
+    ///      vault's idle USDC balance (default ERC-4626 behaviour).
+    function totalAssets() public view override returns (uint256) {
+        uint256 total = IERC20(asset()).balanceOf(address(this));
+        LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
+        uint256 n = s.strategyIds.length;
+        for (uint256 i; i < n; i++) {
+            bytes32 id = s.strategyIds[i];
+            LibAllocator.StrategyConfig storage cfg = s.configs[id];
+            if (!cfg.active) continue;
+            (bool ok, bytes memory data) =
+                address(this).staticcall(abi.encodeWithSelector(cfg.totalAssetsSelector));
+            if (!ok) revert StrategyTotalAssetsCallFailed(id);
+            total += abi.decode(data, (uint256));
+        }
+        return total;
     }
 
     fallback() external payable {
