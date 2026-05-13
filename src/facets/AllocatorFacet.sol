@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
-import {LibDiamond} from "../libraries/LibDiamond.sol";
-import {LibAllocator} from "../libraries/LibAllocator.sol";
+import { LibDiamond } from "../libraries/LibDiamond.sol";
+import { LibAllocator } from "../libraries/LibAllocator.sol";
 
 /// @title AllocatorFacet
 /// @notice Curator-controlled allocation policy. Registers strategy facets,
@@ -203,8 +203,7 @@ contract AllocatorFacet {
     function strategyTotalAssets(bytes32 strategyId) external view returns (uint256) {
         LibAllocator.StrategyConfig memory cfg = LibAllocator.allocatorStorage().configs[strategyId];
         if (!cfg.active) revert StrategyNotRegistered(strategyId);
-        (bool ok, bytes memory data) =
-            address(this).staticcall(abi.encodeWithSelector(cfg.totalAssetsSelector));
+        (bool ok, bytes memory data) = address(this).staticcall(abi.encodeWithSelector(cfg.totalAssetsSelector));
         if (!ok) revert StrategyTotalAssetsCallFailed(strategyId);
         return abi.decode(data, (uint256));
     }
@@ -235,7 +234,10 @@ contract AllocatorFacet {
         return IERC20(asset).balanceOf(address(this));
     }
 
-    function _strategyTotalAssetsInternal(LibAllocator.StrategyConfig memory cfg, bytes32 strategyId)
+    function _strategyTotalAssetsInternal(
+        LibAllocator.StrategyConfig memory cfg,
+        bytes32 strategyId
+    )
         internal
         view
         returns (uint256)
@@ -264,11 +266,7 @@ contract AllocatorFacet {
         }
     }
 
-    function _effectiveCap(LibAllocator.AllocatorStorage storage s, bytes32 strategyId)
-        internal
-        view
-        returns (uint16)
-    {
+    function _effectiveCap(LibAllocator.AllocatorStorage storage s, bytes32 strategyId) internal view returns (uint16) {
         uint16 perStrategy = s.configs[strategyId].capBps;
         uint16 glob = s.globalMaxStrategyCapBps;
         if (perStrategy == 0 && glob == 0) return LibAllocator.BPS_DENOMINATOR;

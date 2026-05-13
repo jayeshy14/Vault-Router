@@ -1,27 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Test } from "forge-std/Test.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {Vault} from "../../src/Vault.sol";
-import {IDiamond} from "../../src/interfaces/IDiamond.sol";
-import {IDiamondCut} from "../../src/interfaces/IDiamondCut.sol";
-import {IDiamondLoupe} from "../../src/interfaces/IDiamondLoupe.sol";
-import {IERC173} from "../../src/interfaces/IERC173.sol";
-import {DiamondCutFacet} from "../../src/facets/DiamondCutFacet.sol";
-import {DiamondLoupeFacet} from "../../src/facets/DiamondLoupeFacet.sol";
-import {OwnershipFacet} from "../../src/facets/OwnershipFacet.sol";
-import {IdleStrategyFacet} from "../../src/facets/strategies/IdleStrategyFacet.sol";
-import {AllocatorFacet} from "../../src/facets/AllocatorFacet.sol";
-import {LibAllocator} from "../../src/libraries/LibAllocator.sol";
+import { Vault } from "../../src/Vault.sol";
+import { IDiamond } from "../../src/interfaces/IDiamond.sol";
+import { IDiamondCut } from "../../src/interfaces/IDiamondCut.sol";
+import { IDiamondLoupe } from "../../src/interfaces/IDiamondLoupe.sol";
+import { IERC173 } from "../../src/interfaces/IERC173.sol";
+import { DiamondCutFacet } from "../../src/facets/DiamondCutFacet.sol";
+import { DiamondLoupeFacet } from "../../src/facets/DiamondLoupeFacet.sol";
+import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
+import { IdleStrategyFacet } from "../../src/facets/strategies/IdleStrategyFacet.sol";
+import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
+import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 
-import {MockProtocol} from "../mocks/MockProtocol.sol";
-import {MockStrategyFacet} from "../mocks/MockStrategyFacet.sol";
+import { MockProtocol } from "../mocks/MockProtocol.sol";
+import { MockStrategyFacet } from "../mocks/MockStrategyFacet.sol";
 
 contract MockUSDC is ERC20 {
-    constructor() ERC20("USD Coin", "USDC") {}
+    constructor() ERC20("USD Coin", "USDC") { }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -84,30 +84,28 @@ contract AllocatorTest is Test {
 
     function test_SetAllocation_RejectsBudgetExceeded() public {
         vm.prank(owner);
-        AllocatorFacet(address(vault)).setIdleReserve(2_000); // 20%
+        AllocatorFacet(address(vault)).setIdleReserve(2000); // 20%
 
         bytes32[] memory ids = new bytes32[](1);
         uint16[] memory bps = new uint16[](1);
         ids[0] = MOCK_ID;
-        bps[0] = 9_000; // 90%, but only 80% is allocatable
+        bps[0] = 9000; // 90%, but only 80% is allocatable
 
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(AllocatorFacet.AllocationExceedsBudget.selector, 9_000, 8_000));
+        vm.expectRevert(abi.encodeWithSelector(AllocatorFacet.AllocationExceedsBudget.selector, 9000, 8000));
         AllocatorFacet(address(vault)).setAllocation(ids, bps);
     }
 
     function test_SetAllocation_RejectsCapExceeded() public {
         vm.startPrank(owner);
-        AllocatorFacet(address(vault)).setStrategyCap(MOCK_ID, 5_000); // 50% cap on mock
+        AllocatorFacet(address(vault)).setStrategyCap(MOCK_ID, 5000); // 50% cap on mock
 
         bytes32[] memory ids = new bytes32[](1);
         uint16[] memory bps = new uint16[](1);
         ids[0] = MOCK_ID;
-        bps[0] = 6_000;
+        bps[0] = 6000;
 
-        vm.expectRevert(
-            abi.encodeWithSelector(AllocatorFacet.AllocationExceedsCap.selector, MOCK_ID, 5_000, 6_000)
-        );
+        vm.expectRevert(abi.encodeWithSelector(AllocatorFacet.AllocationExceedsCap.selector, MOCK_ID, 5000, 6000));
         AllocatorFacet(address(vault)).setAllocation(ids, bps);
         vm.stopPrank();
     }
@@ -116,12 +114,12 @@ contract AllocatorTest is Test {
         bytes32[] memory ids = new bytes32[](1);
         uint16[] memory bps = new uint16[](1);
         ids[0] = MOCK_ID;
-        bps[0] = 8_000;
+        bps[0] = 8000;
 
         vm.prank(owner);
         AllocatorFacet(address(vault)).setAllocation(ids, bps);
 
-        assertEq(AllocatorFacet(address(vault)).targetAllocation(MOCK_ID), 8_000);
+        assertEq(AllocatorFacet(address(vault)).targetAllocation(MOCK_ID), 8000);
     }
 
     // -----------------------------------------------------------------------
@@ -129,8 +127,8 @@ contract AllocatorTest is Test {
     // -----------------------------------------------------------------------
 
     function test_Rebalance_DistributesAssetsToStrategy() public {
-        _depositToVault(alice, 1_000 * 1e6);
-        _setSingleAllocation(MOCK_ID, 8_000);
+        _depositToVault(alice, 1000 * 1e6);
+        _setSingleAllocation(MOCK_ID, 8000);
 
         vm.roll(block.number + 1);
         vm.prank(owner);
@@ -141,8 +139,8 @@ contract AllocatorTest is Test {
     }
 
     function test_Rebalance_PullsBackWhenAllocationDrops() public {
-        _depositToVault(alice, 1_000 * 1e6);
-        _setSingleAllocation(MOCK_ID, 8_000);
+        _depositToVault(alice, 1000 * 1e6);
+        _setSingleAllocation(MOCK_ID, 8000);
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
@@ -160,31 +158,29 @@ contract AllocatorTest is Test {
         AllocatorFacet(address(vault)).rebalance();
 
         assertEq(mockProtocol.balanceOf(address(vault)), 0, "mock protocol drained");
-        assertEq(usdc.balanceOf(address(vault)), 1_000 * 1e6, "all assets back idle");
+        assertEq(usdc.balanceOf(address(vault)), 1000 * 1e6, "all assets back idle");
     }
 
     function test_Rebalance_RevertsSameBlock() public {
-        _depositToVault(alice, 1_000 * 1e6);
-        _setSingleAllocation(MOCK_ID, 5_000);
+        _depositToVault(alice, 1000 * 1e6);
+        _setSingleAllocation(MOCK_ID, 5000);
 
         vm.roll(block.number + 1);
         vm.startPrank(owner);
         AllocatorFacet(address(vault)).rebalance();
 
-        vm.expectRevert(
-            abi.encodeWithSelector(AllocatorFacet.RebalanceTooSoon.selector, block.number, block.number)
-        );
+        vm.expectRevert(abi.encodeWithSelector(AllocatorFacet.RebalanceTooSoon.selector, block.number, block.number));
         AllocatorFacet(address(vault)).rebalance();
         vm.stopPrank();
     }
 
     function test_VaultTotalAssets_SumsIdleAndStrategyPositions() public {
-        _depositToVault(alice, 1_000 * 1e6);
+        _depositToVault(alice, 1000 * 1e6);
 
         // Before rebalance, all 1_000 sits idle in the vault.
-        assertEq(vault.totalAssets(), 1_000 * 1e6, "all idle before rebalance");
+        assertEq(vault.totalAssets(), 1000 * 1e6, "all idle before rebalance");
 
-        _setSingleAllocation(MOCK_ID, 7_000);
+        _setSingleAllocation(MOCK_ID, 7000);
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
@@ -192,12 +188,12 @@ contract AllocatorTest is Test {
         // After: 300 idle + 700 in mock protocol = 1_000 reported.
         assertEq(usdc.balanceOf(address(vault)), 300 * 1e6, "idle = 30%");
         assertEq(mockProtocol.balanceOf(address(vault)), 700 * 1e6, "deployed = 70%");
-        assertEq(vault.totalAssets(), 1_000 * 1e6, "totalAssets unchanged across rebalance");
+        assertEq(vault.totalAssets(), 1000 * 1e6, "totalAssets unchanged across rebalance");
     }
 
     function test_StrategyTotalAssets_ReadsViaFallback() public {
-        _depositToVault(alice, 1_000 * 1e6);
-        _setSingleAllocation(MOCK_ID, 5_000);
+        _depositToVault(alice, 1000 * 1e6);
+        _setSingleAllocation(MOCK_ID, 5000);
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
@@ -207,15 +203,15 @@ contract AllocatorTest is Test {
     }
 
     function test_IdleReserve_FloorEnforcedAfterRebalance() public {
-        _depositToVault(alice, 1_000 * 1e6);
+        _depositToVault(alice, 1000 * 1e6);
         vm.prank(owner);
-        AllocatorFacet(address(vault)).setIdleReserve(2_500); // 25% floor
+        AllocatorFacet(address(vault)).setIdleReserve(2500); // 25% floor
 
         // Allocation that exactly hits the budget: 75% to strategy, 25% idle.
         bytes32[] memory ids = new bytes32[](1);
         uint16[] memory bps = new uint16[](1);
         ids[0] = MOCK_ID;
-        bps[0] = 7_500;
+        bps[0] = 7500;
         vm.prank(owner);
         AllocatorFacet(address(vault)).setAllocation(ids, bps);
 
@@ -241,9 +237,7 @@ contract AllocatorTest is Test {
 
         IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](6);
         cuts[0] = IDiamond.FacetCut({
-            facetAddress: address(cut),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _diamondCutSelectors()
+            facetAddress: address(cut), action: IDiamond.FacetCutAction.Add, functionSelectors: _diamondCutSelectors()
         });
         cuts[1] = IDiamond.FacetCut({
             facetAddress: address(loupe),
@@ -256,9 +250,7 @@ contract AllocatorTest is Test {
             functionSelectors: _ownershipSelectors()
         });
         cuts[3] = IDiamond.FacetCut({
-            facetAddress: address(idle),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _idleSelectors()
+            facetAddress: address(idle), action: IDiamond.FacetCutAction.Add, functionSelectors: _idleSelectors()
         });
         cuts[4] = IDiamond.FacetCut({
             facetAddress: address(allocator),
@@ -266,9 +258,7 @@ contract AllocatorTest is Test {
             functionSelectors: _allocatorSelectors()
         });
         cuts[5] = IDiamond.FacetCut({
-            facetAddress: address(mock),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _mockSelectors()
+            facetAddress: address(mock), action: IDiamond.FacetCutAction.Add, functionSelectors: _mockSelectors()
         });
 
         return new Vault(IERC20(address(usdc)), "Vault Router", "vUSDC", owner, cuts, address(0), "");

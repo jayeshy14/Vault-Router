@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
-import {LibDiamond} from "../../libraries/LibDiamond.sol";
-import {IAavePool} from "../../interfaces/external/IAavePool.sol";
+import { LibDiamond } from "../../libraries/LibDiamond.sol";
+import { IAavePool } from "../../interfaces/external/IAavePool.sol";
 
 /// @title AaveStrategyFacet
 /// @notice Strategy facet that supplies the vault's asset to Aave V3 and
@@ -23,8 +23,7 @@ contract AaveStrategyFacet {
     event AaveConfigSet(IAavePool indexed pool, IERC20 indexed aToken);
 
     /// @dev erc7201:vaultrouter.strategy.aave
-    bytes32 internal constant AAVE_STORAGE_SLOT =
-        0x340080245a7d3e67835fb5055646777827d09fc7212fda4d8d724367e1215700;
+    bytes32 internal constant AAVE_STORAGE_SLOT = 0x340080245a7d3e67835fb5055646777827d09fc7212fda4d8d724367e1215700;
 
     struct AaveStorage {
         IAavePool pool;
@@ -88,7 +87,7 @@ contract AaveStrategyFacet {
 
     /// @notice No-op for Aave V3 — supply yield auto-accrues into the aToken's
     ///         rebasing balance, so there's nothing to claim.
-    function aaveHarvest() external pure {}
+    function aaveHarvest() external pure { }
 
     // -----------------------------------------------------------------------
     // Readers

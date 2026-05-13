@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { ERC4626 } from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {IDiamond} from "./interfaces/IDiamond.sol";
-import {LibDiamond} from "./libraries/LibDiamond.sol";
-import {LibAllocator} from "./libraries/LibAllocator.sol";
-import {LibFees} from "./libraries/LibFees.sol";
+import { IDiamond } from "./interfaces/IDiamond.sol";
+import { LibDiamond } from "./libraries/LibDiamond.sol";
+import { LibAllocator } from "./libraries/LibAllocator.sol";
+import { LibFees } from "./libraries/LibFees.sol";
 
 /// @title Vault Router — modular ERC-4626 vault on the EIP-2535 Diamond pattern.
 /// @notice Vault.sol owns the ERC-4626 surface (deposit/withdraw/totalAssets) and
@@ -28,7 +28,10 @@ contract Vault is ERC4626 {
         IDiamond.FacetCut[] memory diamondCut_,
         address init_,
         bytes memory initCalldata_
-    ) ERC20(name_, symbol_) ERC4626(asset_) {
+    )
+        ERC20(name_, symbol_)
+        ERC4626(asset_)
+    {
         LibDiamond.setContractOwner(initialOwner);
         LibDiamond.diamondCut(diamondCut_, init_, initCalldata_);
     }
@@ -52,8 +55,7 @@ contract Vault is ERC4626 {
             bytes32 id = s.strategyIds[i];
             LibAllocator.StrategyConfig storage cfg = s.configs[id];
             if (!cfg.active) continue;
-            (bool ok, bytes memory data) =
-                address(this).staticcall(abi.encodeWithSelector(cfg.totalAssetsSelector));
+            (bool ok, bytes memory data) = address(this).staticcall(abi.encodeWithSelector(cfg.totalAssetsSelector));
             if (!ok) revert StrategyTotalAssetsCallFailed(id);
             total += abi.decode(data, (uint256));
         }
@@ -64,12 +66,7 @@ contract Vault is ERC4626 {
     // Fee-accrual hooks
     // -----------------------------------------------------------------------
 
-    function _deposit(
-        address caller,
-        address receiver,
-        uint256 assets,
-        uint256 shares
-    ) internal override {
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
         // Pre-accrue so the new depositor doesn't dilute the perf-fee owed on
         // yield earned by existing holders. No-op on the very first deposit
         // (supply == 0 → early return).
@@ -86,7 +83,10 @@ contract Vault is ERC4626 {
         address owner,
         uint256 assets,
         uint256 shares
-    ) internal override {
+    )
+        internal
+        override
+    {
         _accrueFees();
         super._withdraw(caller, receiver, owner, assets, shares);
         _accrueFees();
@@ -157,5 +157,5 @@ contract Vault is ERC4626 {
         }
     }
 
-    receive() external payable {}
+    receive() external payable { }
 }
