@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Test } from "forge-std/Test.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {Vault} from "../../src/Vault.sol";
-import {IDiamond} from "../../src/interfaces/IDiamond.sol";
-import {IDiamondCut} from "../../src/interfaces/IDiamondCut.sol";
-import {IDiamondLoupe} from "../../src/interfaces/IDiamondLoupe.sol";
-import {IERC173} from "../../src/interfaces/IERC173.sol";
-import {DiamondCutFacet} from "../../src/facets/DiamondCutFacet.sol";
-import {DiamondLoupeFacet} from "../../src/facets/DiamondLoupeFacet.sol";
-import {OwnershipFacet} from "../../src/facets/OwnershipFacet.sol";
-import {IdleStrategyFacet} from "../../src/facets/strategies/IdleStrategyFacet.sol";
+import { Vault } from "../../src/Vault.sol";
+import { IDiamond } from "../../src/interfaces/IDiamond.sol";
+import { IDiamondCut } from "../../src/interfaces/IDiamondCut.sol";
+import { IDiamondLoupe } from "../../src/interfaces/IDiamondLoupe.sol";
+import { IERC173 } from "../../src/interfaces/IERC173.sol";
+import { DiamondCutFacet } from "../../src/facets/DiamondCutFacet.sol";
+import { DiamondLoupeFacet } from "../../src/facets/DiamondLoupeFacet.sol";
+import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
+import { IdleStrategyFacet } from "../../src/facets/strategies/IdleStrategyFacet.sol";
 
 contract MockUSDC is ERC20 {
-    constructor() ERC20("USD Coin", "USDC") {}
+    constructor() ERC20("USD Coin", "USDC") { }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -39,7 +39,7 @@ contract VaultTest is Test {
     }
 
     function test_DepositMintsSharesAndIncreasesTotalAssets() public {
-        uint256 amount = 1_000 * 1e6;
+        uint256 amount = 1000 * 1e6;
         usdc.mint(alice, amount);
 
         vm.startPrank(alice);
@@ -54,7 +54,7 @@ contract VaultTest is Test {
     }
 
     function test_RedeemReturnsAssetsToOwner() public {
-        uint256 amount = 1_000 * 1e6;
+        uint256 amount = 1000 * 1e6;
         usdc.mint(alice, amount);
 
         vm.startPrank(alice);
@@ -117,9 +117,7 @@ contract VaultTest is Test {
 
         IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](4);
         cuts[0] = IDiamond.FacetCut({
-            facetAddress: address(cut),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _diamondCutSelectors()
+            facetAddress: address(cut), action: IDiamond.FacetCutAction.Add, functionSelectors: _diamondCutSelectors()
         });
         cuts[1] = IDiamond.FacetCut({
             facetAddress: address(loupe),
@@ -132,9 +130,7 @@ contract VaultTest is Test {
             functionSelectors: _ownershipSelectors()
         });
         cuts[3] = IDiamond.FacetCut({
-            facetAddress: address(idle),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _idleSelectors()
+            facetAddress: address(idle), action: IDiamond.FacetCutAction.Add, functionSelectors: _idleSelectors()
         });
 
         return new Vault(asset_, "Vault Router", "vUSDC", owner, cuts, address(0), "");

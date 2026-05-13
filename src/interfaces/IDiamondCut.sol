@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IDiamond} from "./IDiamond.sol";
+import { IDiamond } from "./IDiamond.sol";
 
 interface IDiamondCut is IDiamond {
     /// @notice Add/replace/remove any number of functions and optionally execute

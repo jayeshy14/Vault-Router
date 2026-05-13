@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Test } from "forge-std/Test.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {Vault} from "../../src/Vault.sol";
-import {IDiamond} from "../../src/interfaces/IDiamond.sol";
-import {IDiamondCut} from "../../src/interfaces/IDiamondCut.sol";
-import {IDiamondLoupe} from "../../src/interfaces/IDiamondLoupe.sol";
-import {IERC173} from "../../src/interfaces/IERC173.sol";
-import {DiamondCutFacet} from "../../src/facets/DiamondCutFacet.sol";
-import {DiamondLoupeFacet} from "../../src/facets/DiamondLoupeFacet.sol";
-import {OwnershipFacet} from "../../src/facets/OwnershipFacet.sol";
-import {AllocatorFacet} from "../../src/facets/AllocatorFacet.sol";
-import {AaveStrategyFacet} from "../../src/facets/strategies/AaveStrategyFacet.sol";
-import {IAavePool} from "../../src/interfaces/external/IAavePool.sol";
-import {LibAllocator} from "../../src/libraries/LibAllocator.sol";
+import { Vault } from "../../src/Vault.sol";
+import { IDiamond } from "../../src/interfaces/IDiamond.sol";
+import { IDiamondCut } from "../../src/interfaces/IDiamondCut.sol";
+import { IDiamondLoupe } from "../../src/interfaces/IDiamondLoupe.sol";
+import { IERC173 } from "../../src/interfaces/IERC173.sol";
+import { DiamondCutFacet } from "../../src/facets/DiamondCutFacet.sol";
+import { DiamondLoupeFacet } from "../../src/facets/DiamondLoupeFacet.sol";
+import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
+import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
+import { AaveStrategyFacet } from "../../src/facets/strategies/AaveStrategyFacet.sol";
+import { IAavePool } from "../../src/interfaces/external/IAavePool.sol";
+import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 
 /// @title AaveStrategyForkTest
 /// @notice Exercises the AaveStrategyFacet end-to-end against the real Aave V3
@@ -51,7 +51,7 @@ contract AaveStrategyForkTest is Test {
         vm.startPrank(owner);
         AaveStrategyFacet(address(vault)).aaveSetConfig(IAavePool(BASE_AAVE_POOL), IERC20(BASE_AUSDC));
         AllocatorFacet(address(vault)).registerStrategy(AAVE_ID, _aaveStrategyConfig());
-        _setSingleAllocation(AAVE_ID, 8_000); // 80% to Aave
+        _setSingleAllocation(AAVE_ID, 8000); // 80% to Aave
         vm.stopPrank();
     }
 
@@ -60,9 +60,9 @@ contract AaveStrategyForkTest is Test {
     // -----------------------------------------------------------------------
 
     function test_DepositRebalanceDeploysToAUsdc() public {
-        _seedAndDeposit(alice, 1_000 * 1e6);
+        _seedAndDeposit(alice, 1000 * 1e6);
 
-        assertEq(IERC20(BASE_USDC).balanceOf(address(vault)), 1_000 * 1e6, "USDC sits idle pre-rebalance");
+        assertEq(IERC20(BASE_USDC).balanceOf(address(vault)), 1000 * 1e6, "USDC sits idle pre-rebalance");
         assertEq(IERC20(BASE_AUSDC).balanceOf(address(vault)), 0, "no aUSDC yet");
 
         vm.roll(block.number + 1);
@@ -77,11 +77,11 @@ contract AaveStrategyForkTest is Test {
             1, // 1 wei tolerance for aave's internal rounding
             "80% deployed to aave as aUSDC"
         );
-        assertApproxEqAbs(vault.totalAssets(), 1_000 * 1e6, 1, "totalAssets unchanged");
+        assertApproxEqAbs(vault.totalAssets(), 1000 * 1e6, 1, "totalAssets unchanged");
     }
 
     function test_InterestAccruesIntoATokenBalance() public {
-        _seedAndDeposit(alice, 1_000 * 1e6);
+        _seedAndDeposit(alice, 1000 * 1e6);
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
@@ -96,11 +96,11 @@ contract AaveStrategyForkTest is Test {
         assertGt(aAfter, aBefore, "aUSDC balance grew from supply interest");
 
         // totalAssets reflects the gain.
-        assertGt(vault.totalAssets(), 1_000 * 1e6, "vault TVL grew");
+        assertGt(vault.totalAssets(), 1000 * 1e6, "vault TVL grew");
     }
 
     function test_RedeemWithdrawsFromAaveAndReturnsAssets() public {
-        _seedAndDeposit(alice, 1_000 * 1e6);
+        _seedAndDeposit(alice, 1000 * 1e6);
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
@@ -113,14 +113,9 @@ contract AaveStrategyForkTest is Test {
         vm.prank(alice);
         uint256 assetsReturned = vault.redeem(aliceShares, alice, alice);
 
-        assertGe(assetsReturned, 1_000 * 1e6, "alice gets back at least her principal");
+        assertGe(assetsReturned, 1000 * 1e6, "alice gets back at least her principal");
         assertEq(IERC20(BASE_USDC).balanceOf(alice), assetsReturned, "alice's wallet credited");
-        assertApproxEqAbs(
-            IERC20(BASE_AUSDC).balanceOf(address(vault)),
-            0,
-            1,
-            "aUSDC drained back to idle on redeem"
-        );
+        assertApproxEqAbs(IERC20(BASE_AUSDC).balanceOf(address(vault)), 0, 1, "aUSDC drained back to idle on redeem");
     }
 
     // -----------------------------------------------------------------------
@@ -152,9 +147,7 @@ contract AaveStrategyForkTest is Test {
 
         IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](5);
         cuts[0] = IDiamond.FacetCut({
-            facetAddress: address(cut),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _diamondCutSelectors()
+            facetAddress: address(cut), action: IDiamond.FacetCutAction.Add, functionSelectors: _diamondCutSelectors()
         });
         cuts[1] = IDiamond.FacetCut({
             facetAddress: address(loupe),
@@ -172,9 +165,7 @@ contract AaveStrategyForkTest is Test {
             functionSelectors: _allocatorSelectors()
         });
         cuts[4] = IDiamond.FacetCut({
-            facetAddress: address(aave),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _aaveSelectors()
+            facetAddress: address(aave), action: IDiamond.FacetCutAction.Add, functionSelectors: _aaveSelectors()
         });
 
         return new Vault(IERC20(BASE_USDC), "Vault Router", "vUSDC", owner, cuts, address(0), "");

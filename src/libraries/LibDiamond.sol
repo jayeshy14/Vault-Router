@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IDiamond} from "../interfaces/IDiamond.sol";
-import {IDiamondCut} from "../interfaces/IDiamondCut.sol";
+import { IDiamond } from "../interfaces/IDiamond.sol";
+import { IDiamondCut } from "../interfaces/IDiamondCut.sol";
 
 library LibDiamond {
     bytes32 internal constant DIAMOND_STORAGE_POSITION = keccak256("diamond.standard.diamond.storage");
@@ -139,7 +139,12 @@ library LibDiamond {
         ds.facetAddresses.push(_facetAddress);
     }
 
-    function addFunction(DiamondStorage storage ds, bytes4 _selector, uint96 _selectorPosition, address _facetAddress)
+    function addFunction(
+        DiamondStorage storage ds,
+        bytes4 _selector,
+        uint96 _selectorPosition,
+        address _facetAddress
+    )
         internal
     {
         ds.selectorToFacetAndPosition[_selector].functionSelectorPosition = _selectorPosition;

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
-import {MockProtocol} from "./MockProtocol.sol";
+import { MockProtocol } from "./MockProtocol.sol";
 
 /// @title MockStrategyFacet
 /// @notice Test-only strategy facet that bridges the Diamond to a `MockProtocol`.
@@ -12,8 +12,7 @@ import {MockProtocol} from "./MockProtocol.sol";
 ///         doesn't collide with the vault's ERC-4626 storage or with LibAllocator.
 /// @dev keccak256(abi.encode(uint256(keccak256("vaultrouter.test.mockstrategy")) - 1)) & ~bytes32(uint256(0xff))
 contract MockStrategyFacet {
-    bytes32 internal constant MOCK_STORAGE_SLOT =
-        0x2a93387479f60fbd0b1454d20ad1a7e5268ff2625b39049c9905b150353cb300;
+    bytes32 internal constant MOCK_STORAGE_SLOT = 0x2a93387479f60fbd0b1454d20ad1a7e5268ff2625b39049c9905b150353cb300;
 
     struct MockStorage {
         MockProtocol protocol;

@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Test } from "forge-std/Test.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {Vault} from "../../src/Vault.sol";
-import {IDiamond} from "../../src/interfaces/IDiamond.sol";
-import {IDiamondCut} from "../../src/interfaces/IDiamondCut.sol";
-import {IDiamondLoupe} from "../../src/interfaces/IDiamondLoupe.sol";
-import {IERC173} from "../../src/interfaces/IERC173.sol";
-import {DiamondCutFacet} from "../../src/facets/DiamondCutFacet.sol";
-import {DiamondLoupeFacet} from "../../src/facets/DiamondLoupeFacet.sol";
-import {OwnershipFacet} from "../../src/facets/OwnershipFacet.sol";
-import {AllocatorFacet} from "../../src/facets/AllocatorFacet.sol";
-import {FeeFacet} from "../../src/facets/FeeFacet.sol";
-import {LibAllocator} from "../../src/libraries/LibAllocator.sol";
-import {LibFees} from "../../src/libraries/LibFees.sol";
+import { Vault } from "../../src/Vault.sol";
+import { IDiamond } from "../../src/interfaces/IDiamond.sol";
+import { IDiamondCut } from "../../src/interfaces/IDiamondCut.sol";
+import { IDiamondLoupe } from "../../src/interfaces/IDiamondLoupe.sol";
+import { IERC173 } from "../../src/interfaces/IERC173.sol";
+import { DiamondCutFacet } from "../../src/facets/DiamondCutFacet.sol";
+import { DiamondLoupeFacet } from "../../src/facets/DiamondLoupeFacet.sol";
+import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
+import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
+import { FeeFacet } from "../../src/facets/FeeFacet.sol";
+import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
+import { LibFees } from "../../src/libraries/LibFees.sol";
 
-import {MockProtocol} from "../mocks/MockProtocol.sol";
-import {MockStrategyFacet} from "../mocks/MockStrategyFacet.sol";
+import { MockProtocol } from "../mocks/MockProtocol.sol";
+import { MockStrategyFacet } from "../mocks/MockStrategyFacet.sol";
 
 contract MockUSDC is ERC20 {
-    constructor() ERC20("USD Coin", "USDC") {}
+    constructor() ERC20("USD Coin", "USDC") { }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -62,9 +62,9 @@ contract FeesTest is Test {
     function test_NoFee_WhenRecipientUnset() public {
         // Even with non-zero rates set, no recipient → no fee shares.
         // (Setters reject 0-address recipient, so we just leave it default.)
-        _depositToVault(alice, 1_000 * 1e6);
+        _depositToVault(alice, 1000 * 1e6);
         mockProtocol._testAccrueYield(address(vault), 100 * 1e6); // 10% yield
-        _depositToVault(alice, 1_000 * 1e6); // triggers _accrueFees
+        _depositToVault(alice, 1000 * 1e6); // triggers _accrueFees
 
         assertEq(vault.balanceOf(feeRx), 0, "no fee minted without recipient");
     }
@@ -74,8 +74,8 @@ contract FeesTest is Test {
     // -----------------------------------------------------------------------
 
     function test_PerformanceFee_BootstrapsHwmOnFirstAccrual() public {
-        _configureFees(2_000, 0); // 20% perf, 0% mgmt
-        _depositToVault(alice, 1_000 * 1e6);
+        _configureFees(2000, 0); // 20% perf, 0% mgmt
+        _depositToVault(alice, 1000 * 1e6);
 
         // First deposit just initialised HWM to the current share price.
         // No fee should have been charged.
@@ -84,9 +84,9 @@ contract FeesTest is Test {
     }
 
     function test_PerformanceFee_ChargedOnShareGrowth() public {
-        _configureFees(2_000, 0); // 20% perf
-        _depositToVault(alice, 1_000 * 1e6);
-        _setSingleAllocation(MOCK_ID, 8_000);
+        _configureFees(2000, 0); // 20% perf
+        _depositToVault(alice, 1000 * 1e6);
+        _setSingleAllocation(MOCK_ID, 8000);
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
@@ -105,9 +105,9 @@ contract FeesTest is Test {
     }
 
     function test_PerformanceFee_NotChargedBelowHWM() public {
-        _configureFees(2_000, 0);
-        _depositToVault(alice, 1_000 * 1e6);
-        _setSingleAllocation(MOCK_ID, 8_000);
+        _configureFees(2000, 0);
+        _depositToVault(alice, 1000 * 1e6);
+        _setSingleAllocation(MOCK_ID, 8000);
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
@@ -136,7 +136,7 @@ contract FeesTest is Test {
 
     function test_ManagementFee_AccruedOverTime() public {
         _configureFees(0, 200); // 0% perf, 2%/year mgmt
-        _depositToVault(alice, 1_000 * 1e6);
+        _depositToVault(alice, 1000 * 1e6);
 
         uint256 supplyBefore = vault.totalSupply();
 
@@ -191,9 +191,7 @@ contract FeesTest is Test {
 
         IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](6);
         cuts[0] = IDiamond.FacetCut({
-            facetAddress: address(cut),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _diamondCutSelectors()
+            facetAddress: address(cut), action: IDiamond.FacetCutAction.Add, functionSelectors: _diamondCutSelectors()
         });
         cuts[1] = IDiamond.FacetCut({
             facetAddress: address(loupe),
@@ -211,14 +209,10 @@ contract FeesTest is Test {
             functionSelectors: _allocatorSelectors()
         });
         cuts[4] = IDiamond.FacetCut({
-            facetAddress: address(feeFacet),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _feeSelectors()
+            facetAddress: address(feeFacet), action: IDiamond.FacetCutAction.Add, functionSelectors: _feeSelectors()
         });
         cuts[5] = IDiamond.FacetCut({
-            facetAddress: address(mock),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _mockSelectors()
+            facetAddress: address(mock), action: IDiamond.FacetCutAction.Add, functionSelectors: _mockSelectors()
         });
 
         return new Vault(IERC20(address(usdc)), "Vault Router", "vUSDC", owner, cuts, address(0), "");

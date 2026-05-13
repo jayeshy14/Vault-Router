@@ -1,27 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { Test } from "forge-std/Test.sol";
+import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {Vault} from "../../src/Vault.sol";
-import {IDiamond} from "../../src/interfaces/IDiamond.sol";
-import {IDiamondCut} from "../../src/interfaces/IDiamondCut.sol";
-import {IDiamondLoupe} from "../../src/interfaces/IDiamondLoupe.sol";
-import {IERC173} from "../../src/interfaces/IERC173.sol";
-import {DiamondCutFacet} from "../../src/facets/DiamondCutFacet.sol";
-import {DiamondLoupeFacet} from "../../src/facets/DiamondLoupeFacet.sol";
-import {OwnershipFacet} from "../../src/facets/OwnershipFacet.sol";
-import {AllocatorFacet} from "../../src/facets/AllocatorFacet.sol";
-import {HarvestFacet} from "../../src/facets/HarvestFacet.sol";
-import {LibAllocator} from "../../src/libraries/LibAllocator.sol";
+import { Vault } from "../../src/Vault.sol";
+import { IDiamond } from "../../src/interfaces/IDiamond.sol";
+import { IDiamondCut } from "../../src/interfaces/IDiamondCut.sol";
+import { IDiamondLoupe } from "../../src/interfaces/IDiamondLoupe.sol";
+import { IERC173 } from "../../src/interfaces/IERC173.sol";
+import { DiamondCutFacet } from "../../src/facets/DiamondCutFacet.sol";
+import { DiamondLoupeFacet } from "../../src/facets/DiamondLoupeFacet.sol";
+import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
+import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
+import { HarvestFacet } from "../../src/facets/HarvestFacet.sol";
+import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 
-import {MockProtocol} from "../mocks/MockProtocol.sol";
-import {MockStrategyFacet} from "../mocks/MockStrategyFacet.sol";
+import { MockProtocol } from "../mocks/MockProtocol.sol";
+import { MockStrategyFacet } from "../mocks/MockStrategyFacet.sol";
 
 contract MockUSDC is ERC20 {
-    constructor() ERC20("USD Coin", "USDC") {}
+    constructor() ERC20("USD Coin", "USDC") { }
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
@@ -98,9 +98,7 @@ contract HarvestTest is Test {
 
         IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](6);
         cuts[0] = IDiamond.FacetCut({
-            facetAddress: address(cut),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _diamondCutSelectors()
+            facetAddress: address(cut), action: IDiamond.FacetCutAction.Add, functionSelectors: _diamondCutSelectors()
         });
         cuts[1] = IDiamond.FacetCut({
             facetAddress: address(loupe),
@@ -123,9 +121,7 @@ contract HarvestTest is Test {
             functionSelectors: _harvestSelectors()
         });
         cuts[5] = IDiamond.FacetCut({
-            facetAddress: address(mock),
-            action: IDiamond.FacetCutAction.Add,
-            functionSelectors: _mockSelectors()
+            facetAddress: address(mock), action: IDiamond.FacetCutAction.Add, functionSelectors: _mockSelectors()
         });
 
         return new Vault(IERC20(address(usdc)), "Vault Router", "vUSDC", owner, cuts, address(0), "");

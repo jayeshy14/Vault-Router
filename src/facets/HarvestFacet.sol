@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {LibDiamond} from "../libraries/LibDiamond.sol";
-import {LibAllocator} from "../libraries/LibAllocator.sol";
+import { LibDiamond } from "../libraries/LibDiamond.sol";
+import { LibAllocator } from "../libraries/LibAllocator.sol";
 
 /// @title HarvestFacet
 /// @notice Curator-triggered harvest. Invokes the per-strategy harvest selector
@@ -27,8 +27,7 @@ contract HarvestFacet {
         LibAllocator.StrategyConfig memory cfg = LibAllocator.allocatorStorage().configs[strategyId];
         if (!cfg.active) revert StrategyNotRegistered(strategyId);
         if (cfg.harvestSelector != bytes4(0)) {
-            (bool ok, bytes memory ret) =
-                address(this).call(abi.encodeWithSelector(cfg.harvestSelector));
+            (bool ok, bytes memory ret) = address(this).call(abi.encodeWithSelector(cfg.harvestSelector));
             if (!ok) {
                 if (ret.length > 0) {
                     assembly {
@@ -51,8 +50,7 @@ contract HarvestFacet {
             LibAllocator.StrategyConfig memory cfg = s.configs[id];
             if (!cfg.active) continue;
             if (cfg.harvestSelector != bytes4(0)) {
-                (bool ok, bytes memory ret) =
-                    address(this).call(abi.encodeWithSelector(cfg.harvestSelector));
+                (bool ok, bytes memory ret) = address(this).call(abi.encodeWithSelector(cfg.harvestSelector));
                 if (!ok) {
                     if (ret.length > 0) {
                         assembly {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {LibDiamond} from "../libraries/LibDiamond.sol";
-import {LibFees} from "../libraries/LibFees.sol";
+import { LibDiamond } from "../libraries/LibDiamond.sol";
+import { LibFees } from "../libraries/LibFees.sol";
 
 /// @title FeeFacet
 /// @notice Curator-gated setters and public readers for the vault's fee parameters.
