@@ -106,16 +106,22 @@ contract MorphoStrategyFacet {
         if (shares < expected) revert MorphoSlippage(expected, shares);
     }
 
-    /// @notice Withdraw `assets` of underlying from Metamorpho back to the diamond.
+    /// @notice Withdraw `amount` of underlying from Metamorpho back to the diamond.
     /// @dev Strategy-internal primitive. Underlying always returns to the diamond
     ///      itself — forwarding to a user-chosen receiver is the responsibility
     ///      of the user-facing redeem path that also burns shares.
-    /// @param assets Quantity of underlying asset to pull out of Morpho.
-    function morphoWithdraw(uint256 assets) external {
+    /// @param amount Quantity of underlying asset to pull out of Morpho.
+    function morphoWithdraw(uint256 amount) external {
         MorphoStorage storage s = _ms();
         if (address(s.vault) == address(0)) revert MorphoVaultNotConfigured();
-        s.vault.withdraw(assets, address(this), address(this));
+        s.vault.withdraw(amount, address(this), address(this));
     }
+
+    /// @notice No-op for Metamorpho — supply yield auto-compounds into the
+    ///         vault's share price, so there is nothing to claim.
+    /// @dev Present so the facet exposes the full strategy surface
+    ///      (`harvestSelector`) the allocator's `StrategyConfig` expects.
+    function morphoHarvest() external pure { }
 
     //view
 
