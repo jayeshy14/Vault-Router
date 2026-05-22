@@ -19,6 +19,8 @@ contract AaveStrategyFacet {
 
     error AavePoolNotConfigured();
     error AaveATokenNotConfigured();
+    error AaveDepositFailed(uint256 expected, uint256 received);
+    error AaveWithdrawFailed(uint256 expected, uint256 received);
 
     event AaveConfigSet(IAavePool indexed pool, IERC20 indexed aToken);
 
@@ -69,20 +71,27 @@ contract AaveStrategyFacet {
 
     /// @notice Pulls `amount` of the underlying from idle and supplies it to Aave V3.
     /// @dev Called via diamond fallback by the AllocatorFacet during rebalance.
+    ///      Verifies aToken balance increased by at least `amount` after supply.
     function aaveDeposit(uint256 amount) external {
         AaveStorage storage s = _as();
         if (address(s.pool) == address(0)) revert AavePoolNotConfigured();
         IERC20 underlying = IERC20(IERC4626(address(this)).asset());
+        uint256 aTokensBefore = s.aToken.balanceOf(address(this));
         underlying.forceApprove(address(s.pool), amount);
         s.pool.supply(address(underlying), amount, address(this), 0);
+        uint256 aTokensReceived = s.aToken.balanceOf(address(this)) - aTokensBefore;
+        if (aTokensReceived < amount) revert AaveDepositFailed(amount, aTokensReceived);
     }
 
     /// @notice Withdraws `amount` of the underlying from Aave V3 back to idle.
+    /// @dev Checks the actual amount returned by pool.withdraw() — Aave can return
+    ///      less than requested if liquidity is insufficient.
     function aaveWithdraw(uint256 amount) external {
         AaveStorage storage s = _as();
         if (address(s.pool) == address(0)) revert AavePoolNotConfigured();
         IERC20 underlying = IERC20(IERC4626(address(this)).asset());
-        s.pool.withdraw(address(underlying), amount, address(this));
+        uint256 actualWithdrawn = s.pool.withdraw(address(underlying), amount, address(this));
+        if (actualWithdrawn < amount) revert AaveWithdrawFailed(amount, actualWithdrawn);
     }
 
     /// @notice No-op for Aave V3 — supply yield auto-accrues into the aToken's
