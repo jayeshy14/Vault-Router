@@ -124,7 +124,10 @@ interface IPendleRouter {
         ApproxParams calldata guessPtOut,
         TokenInput calldata input,
         LimitOrderData calldata limit
-    ) external payable returns (uint256 netPtOut, uint256 netSyFee, uint256 netSyInterm);
+    )
+        external
+        payable
+        returns (uint256 netPtOut, uint256 netSyFee, uint256 netSyInterm);
 
     /// @notice Swap an exact amount of PT for a token.
     /// @param receiver   Address that receives the output token.
@@ -141,7 +144,9 @@ interface IPendleRouter {
         uint256 exactPtIn,
         TokenOutput calldata output,
         LimitOrderData calldata limit
-    ) external returns (uint256 netTokenOut, uint256 netSyFee, uint256 netSyInterm);
+    )
+        external
+        returns (uint256 netTokenOut, uint256 netSyFee, uint256 netSyInterm);
 
     /// @notice Redeem PT (and optionally YT) for the underlying token post-maturity.
     /// @dev After expiry the YT has zero value. Pass netPyIn = PT balance and
@@ -157,5 +162,7 @@ interface IPendleRouter {
         address YT,
         uint256 netPyIn,
         TokenOutput calldata output
-    ) external returns (uint256 netTokenOut, uint256 netSyFee);
+    )
+        external
+        returns (uint256 netTokenOut, uint256 netSyFee);
 }

@@ -3,7 +3,8 @@ pragma solidity ^0.8.24;
 
 /// @title IPPrincipalToken
 /// @notice Minimal interface for Pendle's PendlePrincipalToken (PT).
-/// @dev Reference: https://github.com/pendle-finance/pendle-core-v2-public/blob/main/contracts/core/YieldContracts/PendlePrincipalToken.sol
+/// @dev Reference:
+/// https://github.com/pendle-finance/pendle-core-v2-public/blob/main/contracts/core/YieldContracts/PendlePrincipalToken.sol
 interface IPPrincipalToken {
     /// @notice Returns true if the PT has passed its expiry timestamp.
     function isExpired() external view returns (bool);

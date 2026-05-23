@@ -60,19 +60,14 @@ contract PendlePtStrategyFacet {
     // -----------------------------------------------------------------------
 
     /// @notice Emitted when the facet is configured (or reconfigured).
-    event PendleConfigSet(
-        address indexed router,
-        address indexed market,
-        address indexed pt
-    );
+    event PendleConfigSet(address indexed router, address indexed market, address indexed pt);
 
     // -----------------------------------------------------------------------
     // Storage
     // -----------------------------------------------------------------------
 
     /// @dev erc7201:vaultrouter.strategy.pendle
-    bytes32 internal constant PENDLE_STORAGE_SLOT =
-        0xb0e016db49ce2cfbe35770c2200cbf5f1a9b502bca57dbaaddf328cb9e0cef00;
+    bytes32 internal constant PENDLE_STORAGE_SLOT = 0xb0e016db49ce2cfbe35770c2200cbf5f1a9b502bca57dbaaddf328cb9e0cef00;
 
     struct PendleStorage {
         /// @notice PendleRouterV4 — handles all swap and redemption paths.
@@ -152,21 +147,14 @@ contract PendlePtStrategyFacet {
             tokenMintSy: address(underlying),
             pendleSwap: address(0),
             swapData: IPendleRouter.SwapData({
-                swapType: IPendleRouter.SwapType.NONE,
-                extRouter: address(0),
-                extCalldata: "",
-                needScale: false
+                swapType: IPendleRouter.SwapType.NONE, extRouter: address(0), extCalldata: "", needScale: false
             })
         });
 
         // Loose binary-search bounds — the router will converge within 256
         // iterations to within 0.1% of the optimal PT amount.
         IPendleRouter.ApproxParams memory approx = IPendleRouter.ApproxParams({
-            guessMin: 0,
-            guessMax: type(uint256).max,
-            guessOffchain: 0,
-            maxIteration: 256,
-            eps: 1e15
+            guessMin: 0, guessMax: type(uint256).max, guessOffchain: 0, maxIteration: 256, eps: 1e15
         });
 
         // Empty limit order — strategy does not participate in the limit book.
@@ -174,14 +162,15 @@ contract PendlePtStrategyFacet {
 
         uint256 ptBefore = s.pt.balanceOf(address(this));
 
-        s.router.swapExactTokenForPt(
-            address(this), // PT receiver is the vault itself
-            s.market,
-            0, // minPtOut: checked post-call below
-            approx,
-            input,
-            limit
-        );
+        s.router
+            .swapExactTokenForPt(
+                address(this), // PT receiver is the vault itself
+                s.market,
+                0, // minPtOut: checked post-call below
+                approx,
+                input,
+                limit
+            );
 
         uint256 ptReceived = s.pt.balanceOf(address(this)) - ptBefore;
         if (ptReceived == 0) revert PendleDepositFailed(ptReceived);
@@ -216,10 +205,7 @@ contract PendlePtStrategyFacet {
                 tokenRedeemSy: address(underlying),
                 pendleSwap: address(0),
                 swapData: IPendleRouter.SwapData({
-                    swapType: IPendleRouter.SwapType.NONE,
-                    extRouter: address(0),
-                    extCalldata: "",
-                    needScale: false
+                    swapType: IPendleRouter.SwapType.NONE, extRouter: address(0), extCalldata: "", needScale: false
                 })
             });
 
@@ -234,10 +220,7 @@ contract PendlePtStrategyFacet {
                 tokenRedeemSy: address(underlying),
                 pendleSwap: address(0),
                 swapData: IPendleRouter.SwapData({
-                    swapType: IPendleRouter.SwapType.NONE,
-                    extRouter: address(0),
-                    extCalldata: "",
-                    needScale: false
+                    swapType: IPendleRouter.SwapType.NONE, extRouter: address(0), extCalldata: "", needScale: false
                 })
             });
 
