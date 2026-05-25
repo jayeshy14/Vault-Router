@@ -157,7 +157,7 @@ contract PendlePtStrategyFacet {
             guessMin: 0, guessMax: type(uint256).max, guessOffchain: 0, maxIteration: 256, eps: 1e15
         });
 
-        // Empty limit order — strategy does not participate in the limit book.
+        // Empty limit order, strategy does not participate in the limit book.
         IPendleRouter.LimitOrderData memory limit;
 
         uint256 ptBefore = s.pt.balanceOf(address(this));
