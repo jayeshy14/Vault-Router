@@ -13,35 +13,52 @@ import { DiamondCutFacet } from "../../src/facets/DiamondCutFacet.sol";
 import { DiamondLoupeFacet } from "../../src/facets/DiamondLoupeFacet.sol";
 import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
 import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
-import { AaveStrategyFacet } from "../../src/facets/strategies/AaveStrategyFacet.sol";
-import { IAavePool } from "../../src/interfaces/external/IAavePool.sol";
+import { PendlePtStrategyFacet } from "../../src/facets/strategies/PendlePtStrategyFacet.sol";
+import { IPendleRouter } from "../../src/interfaces/external/IPendleRouter.sol";
+import { IPPrincipalToken } from "../../src/interfaces/external/IPPrincipalToken.sol";
 import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 
-/// @title AaveStrategyForkTest
-/// @notice Exercises the AaveStrategyFacet end-to-end against the real Aave V3
-///         deployment on Arbitrum One. Skipped automatically when no Arbitrum
-///         RPC is available — set ARBITRUM_RPC_URL to opt in.
-contract AaveStrategyForkTest is Test {
+/// @title PendleStrategyForkTest
+/// @notice Exercises the PendlePtStrategyFacet end-to-end against a real Pendle
+///         PT market on Arbitrum One. Skipped automatically when no Arbitrum
+///         RPC is available — set ARBITRUM_RPC_URL to opt in. Also skipped until
+///         ARB_PENDLE_MARKET / ARB_PENDLE_PT are set to a live, non-expired
+///         USDC market (see below). Mirrors AaveStrategy.fork.t.sol.
+///
+///         NOTE on assertions: unlike the lending strategies, PT does not track
+///         the underlying 1:1 pre-maturity — it is bought at a discount and
+///         `pendleTotalAssets` reports PT face value. So the routed position is
+///         asserted as "face value ≥ cost" rather than an exact figure, and the
+///         pin block must precede the market's expiry for the buy path.
+contract PendleStrategyForkTest is Test {
     // -----------------------------------------------------------------------
-    // Arbitrum One Aave V3 — addresses sourced from Aave's address book.
-    // Native USDC (USDCn) market and its aToken (aArbUSDCn).
+    // Arbitrum One — native USDC and Pendle.
+    // Pendle RouterV4 (Arbitrum): 0x888888888889758F76e7103c6CbF23ABbF58F946.
+    // TODO: set ARB_PENDLE_MARKET (PT/SY pool) and ARB_PENDLE_PT (PT token) to a
+    //       live, non-expired USDC-settling market on Arbitrum, and pin
+    //       ARBITRUM_FORK_BLOCK to a block before that market's expiry. Left as
+    //       address(0) until confirmed — the test skips while unset so it never
+    //       silently passes against a bogus market.
     // -----------------------------------------------------------------------
-    address internal constant ARB_AAVE_POOL = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
     address internal constant ARB_USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
-    address internal constant ARB_AUSDC = 0x724dc807b04555b71ed48a6896b6F41593b8C637;
+    address internal constant ARB_PENDLE_ROUTER = 0x888888888889758F76e7103c6CbF23ABbF58F946;
+    address internal constant ARB_PENDLE_MARKET = address(0);
+    address internal constant ARB_PENDLE_PT = address(0);
 
-    bytes32 internal constant AAVE_ID = bytes32("aave");
+    bytes32 internal constant PENDLE_ID = bytes32("pendle");
 
     Vault internal vault;
     address internal owner = makeAddr("owner");
     address internal alice = makeAddr("alice");
 
     function setUp() public {
-        // Fork tests require a dedicated Arbitrum RPC (the public endpoint times
-        // out on the storage-introspection calls forge-std's `deal` cheat makes).
-        // Set ARBITRUM_RPC_URL in your shell or .env to opt in.
         string memory rpc = vm.envOr("ARBITRUM_RPC_URL", string(""));
         if (bytes(rpc).length == 0) {
+            vm.skip(true);
+            return;
+        }
+        // Skip until a real, non-expired Arbitrum Pendle USDC market is wired in.
+        if (ARB_PENDLE_MARKET == address(0) || ARB_PENDLE_PT == address(0)) {
             vm.skip(true);
             return;
         }
@@ -50,9 +67,10 @@ contract AaveStrategyForkTest is Test {
         vault = _deployVault();
 
         vm.startPrank(owner);
-        AaveStrategyFacet(address(vault)).aaveSetConfig(IAavePool(ARB_AAVE_POOL), IERC20(ARB_AUSDC));
-        AllocatorFacet(address(vault)).registerStrategy(AAVE_ID, _aaveStrategyConfig());
-        _setSingleAllocation(AAVE_ID, 8000); // 80% to Aave
+        PendlePtStrategyFacet(address(vault))
+            .pendleSetConfig(IPendleRouter(ARB_PENDLE_ROUTER), ARB_PENDLE_MARKET, IPPrincipalToken(ARB_PENDLE_PT));
+        AllocatorFacet(address(vault)).registerStrategy(PENDLE_ID, _pendleStrategyConfig());
+        _setSingleAllocation(PENDLE_ID, 8000); // 80% to Pendle
         vm.stopPrank();
     }
 
@@ -60,64 +78,42 @@ contract AaveStrategyForkTest is Test {
     // Tests
     // -----------------------------------------------------------------------
 
-    function test_DepositRebalanceDeploysToAUsdc() public {
+    function test_DepositRebalanceBuysPt() public {
         _seedAndDeposit(alice, 1000 * 1e6);
 
         assertEq(IERC20(ARB_USDC).balanceOf(address(vault)), 1000 * 1e6, "USDC sits idle pre-rebalance");
-        assertEq(IERC20(ARB_AUSDC).balanceOf(address(vault)), 0, "no aUSDC yet");
 
         vm.roll(block.number + 1);
         vm.prank(owner);
         AllocatorFacet(address(vault)).rebalance();
 
-        // 80% routed to Aave, 20% stays idle. aUSDC starts at 1:1 with USDC.
+        // 80% (800 USDC) spent on PT, 20% stays idle. PT is bought at a discount,
+        // so face value (== pendleTotalAssets) is at least the 800 spent.
         assertEq(IERC20(ARB_USDC).balanceOf(address(vault)), 200 * 1e6, "20% idle");
-        assertApproxEqAbs(
-            IERC20(ARB_AUSDC).balanceOf(address(vault)),
-            800 * 1e6,
-            1, // 1 wei tolerance for aave's internal rounding
-            "80% deployed to aave as aUSDC"
+        assertGe(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 800 * 1e6, "PT face value >= cost");
+        assertGt(IERC20(ARB_PENDLE_PT).balanceOf(address(vault)), 0, "diamond holds PT");
+    }
+
+    function test_RebalancePullsBackFromPendle() public {
+        _seedAndDeposit(alice, 1000 * 1e6);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
+
+        // Drop the allocation to 0 and rebalance — sells PT back to USDC on the
+        // Pendle AMM via pendleWithdraw (pre-maturity path).
+        vm.prank(owner);
+        _setSingleAllocation(PENDLE_ID, 0);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 0, "PT position drained");
+        // Selling PT before maturity realises the AMM discount, so the idle
+        // balance returns to within a few percent of the original 1000.
+        assertApproxEqRel(
+            IERC20(ARB_USDC).balanceOf(address(vault)), 1000 * 1e6, 5e16, "assets back idle (within AMM slippage)"
         );
-        assertApproxEqAbs(vault.totalAssets(), 1000 * 1e6, 1, "totalAssets unchanged");
-    }
-
-    function test_InterestAccruesIntoATokenBalance() public {
-        _seedAndDeposit(alice, 1000 * 1e6);
-        vm.roll(block.number + 1);
-        vm.prank(owner);
-        AllocatorFacet(address(vault)).rebalance();
-
-        uint256 aBefore = IERC20(ARB_AUSDC).balanceOf(address(vault));
-
-        // Roll forward ~30 days. Aave accrues by timestamp, so the warp does the
-        // work; the block roll just keeps block.number plausibly ahead.
-        vm.warp(block.timestamp + 30 days);
-        vm.roll(block.number + 1_000_000);
-
-        uint256 aAfter = IERC20(ARB_AUSDC).balanceOf(address(vault));
-        assertGt(aAfter, aBefore, "aUSDC balance grew from supply interest");
-
-        // totalAssets reflects the gain.
-        assertGt(vault.totalAssets(), 1000 * 1e6, "vault TVL grew");
-    }
-
-    function test_RedeemWithdrawsFromAaveAndReturnsAssets() public {
-        _seedAndDeposit(alice, 1000 * 1e6);
-        vm.roll(block.number + 1);
-        vm.prank(owner);
-        AllocatorFacet(address(vault)).rebalance();
-
-        // Accrue some interest.
-        vm.warp(block.timestamp + 30 days);
-        vm.roll(block.number + 1_296_000);
-
-        uint256 aliceShares = vault.balanceOf(alice);
-        vm.prank(alice);
-        uint256 assetsReturned = vault.redeem(aliceShares, alice, alice);
-
-        assertGe(assetsReturned, 1000 * 1e6, "alice gets back at least her principal");
-        assertEq(IERC20(ARB_USDC).balanceOf(alice), assetsReturned, "alice's wallet credited");
-        assertApproxEqAbs(IERC20(ARB_AUSDC).balanceOf(address(vault)), 0, 1, "aUSDC drained back to idle on redeem");
     }
 
     // -----------------------------------------------------------------------
@@ -140,12 +136,23 @@ contract AaveStrategyForkTest is Test {
         AllocatorFacet(address(vault)).setAllocation(ids, b);
     }
 
+    function _pendleStrategyConfig() internal pure returns (LibAllocator.StrategyConfig memory) {
+        return LibAllocator.StrategyConfig({
+            totalAssetsSelector: PendlePtStrategyFacet.pendleTotalAssets.selector,
+            depositSelector: PendlePtStrategyFacet.pendleDeposit.selector,
+            withdrawSelector: PendlePtStrategyFacet.pendleWithdraw.selector,
+            harvestSelector: PendlePtStrategyFacet.pendleHarvest.selector,
+            capBps: 0,
+            active: false
+        });
+    }
+
     function _deployVault() internal returns (Vault) {
         DiamondCutFacet cut = new DiamondCutFacet();
         DiamondLoupeFacet loupe = new DiamondLoupeFacet();
         OwnershipFacet ownership = new OwnershipFacet();
         AllocatorFacet allocator = new AllocatorFacet();
-        AaveStrategyFacet aave = new AaveStrategyFacet();
+        PendlePtStrategyFacet pendle = new PendlePtStrategyFacet();
 
         IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](5);
         cuts[0] = IDiamond.FacetCut({
@@ -167,21 +174,10 @@ contract AaveStrategyForkTest is Test {
             functionSelectors: _allocatorSelectors()
         });
         cuts[4] = IDiamond.FacetCut({
-            facetAddress: address(aave), action: IDiamond.FacetCutAction.Add, functionSelectors: _aaveSelectors()
+            facetAddress: address(pendle), action: IDiamond.FacetCutAction.Add, functionSelectors: _pendleSelectors()
         });
 
         return new Vault(IERC20(ARB_USDC), "Vault Router", "vUSDC", owner, cuts, address(0), "");
-    }
-
-    function _aaveStrategyConfig() internal pure returns (LibAllocator.StrategyConfig memory) {
-        return LibAllocator.StrategyConfig({
-            totalAssetsSelector: AaveStrategyFacet.aaveTotalAssets.selector,
-            depositSelector: AaveStrategyFacet.aaveDeposit.selector,
-            withdrawSelector: AaveStrategyFacet.aaveWithdraw.selector,
-            harvestSelector: AaveStrategyFacet.aaveHarvest.selector,
-            capBps: 0,
-            active: false
-        });
     }
 
     function _diamondCutSelectors() internal pure returns (bytes4[] memory s) {
@@ -220,13 +216,17 @@ contract AaveStrategyForkTest is Test {
         s[12] = AllocatorFacet.idleAssets.selector;
     }
 
-    function _aaveSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](6);
-        s[0] = AaveStrategyFacet.aaveSetConfig.selector;
-        s[1] = AaveStrategyFacet.aaveTotalAssets.selector;
-        s[2] = AaveStrategyFacet.aaveDeposit.selector;
-        s[3] = AaveStrategyFacet.aaveWithdraw.selector;
-        s[4] = AaveStrategyFacet.aaveHarvest.selector;
-        s[5] = AaveStrategyFacet.aavePool.selector;
+    function _pendleSelectors() internal pure returns (bytes4[] memory s) {
+        s = new bytes4[](10);
+        s[0] = PendlePtStrategyFacet.pendleSetConfig.selector;
+        s[1] = PendlePtStrategyFacet.pendleTotalAssets.selector;
+        s[2] = PendlePtStrategyFacet.pendleDeposit.selector;
+        s[3] = PendlePtStrategyFacet.pendleWithdraw.selector;
+        s[4] = PendlePtStrategyFacet.pendleHarvest.selector;
+        s[5] = PendlePtStrategyFacet.pendleRouter.selector;
+        s[6] = PendlePtStrategyFacet.pendleMarket.selector;
+        s[7] = PendlePtStrategyFacet.pendlePT.selector;
+        s[8] = PendlePtStrategyFacet.pendleIsExpired.selector;
+        s[9] = PendlePtStrategyFacet.pendleExpiry.selector;
     }
 }
