@@ -18,17 +18,22 @@ import { IMorpho } from "../../src/interfaces/external/IMorpho.sol";
 import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 
 /// @title MorphoStrategyForkTest
-/// @notice Exercises the MorphoStrategyFacet end-to-end against the real
-///         Moonwell Flagship USDC Metamorpho vault on Base mainnet. Skipped
-///         automatically when no Base RPC is available — set BASE_RPC_URL to
-///         opt in. Mirrors AaveStrategy.fork.t.sol.
+/// @notice Exercises the MorphoStrategyFacet end-to-end against a real
+///         MetaMorpho USDC vault on Arbitrum One. Skipped automatically when no
+///         Arbitrum RPC is available — set ARBITRUM_RPC_URL to opt in. Also
+///         skipped until ARB_MORPHO_VAULT is set to a live vault (see below).
+///         Mirrors AaveStrategy.fork.t.sol.
 contract MorphoStrategyForkTest is Test {
     // -----------------------------------------------------------------------
-    // Base mainnet — Moonwell Flagship USDC Metamorpho vault (curated by
-    // Block Analitica & B.Protocol). Deployed long before block 25_000_000.
+    // Arbitrum One — native USDC and a MetaMorpho USDC vault.
+    // Morpho Blue singleton on Arbitrum: 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb.
+    // TODO: set ARB_MORPHO_VAULT to a live MetaMorpho USDC vault address on
+    //       Arbitrum (the ERC4626 vault, not the Blue singleton). Left as
+    //       address(0) until confirmed — the test skips while unset so it never
+    //       silently passes against a bogus vault.
     // -----------------------------------------------------------------------
-    address internal constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-    address internal constant BASE_MORPHO_VAULT = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+    address internal constant ARB_USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
+    address internal constant ARB_MORPHO_VAULT = address(0);
 
     bytes32 internal constant MORPHO_ID = bytes32("morpho");
 
@@ -37,22 +42,26 @@ contract MorphoStrategyForkTest is Test {
     address internal alice = makeAddr("alice");
 
     function setUp() public {
-        // Fork tests require a dedicated Base RPC. Set BASE_RPC_URL in your
-        // shell or .env to opt in; otherwise the whole suite is skipped.
-        string memory rpc = vm.envOr("BASE_RPC_URL", string(""));
+        // Fork tests require a dedicated Arbitrum RPC. Set ARBITRUM_RPC_URL in
+        // your shell or .env to opt in; otherwise the whole suite is skipped.
+        string memory rpc = vm.envOr("ARBITRUM_RPC_URL", string(""));
         if (bytes(rpc).length == 0) {
             vm.skip(true);
             return;
         }
-        // Pin a block for determinism. Defaults to 25_000_000 (matches the
-        // Aave fork test); override with BASE_FORK_BLOCK when your RPC has
-        // pruned state that far back (most non-archive nodes have).
-        vm.createSelectFork(rpc, vm.envOr("BASE_FORK_BLOCK", uint256(25_000_000)));
+        // Skip until a real Arbitrum MetaMorpho USDC vault is wired in.
+        if (ARB_MORPHO_VAULT == address(0)) {
+            vm.skip(true);
+            return;
+        }
+        // Pin a block for determinism. Override with ARBITRUM_FORK_BLOCK when
+        // your RPC has pruned state that far back (most non-archive nodes have).
+        vm.createSelectFork(rpc, vm.envOr("ARBITRUM_FORK_BLOCK", uint256(300_000_000)));
 
         vault = _deployVault();
 
         vm.startPrank(owner);
-        MorphoStrategyFacet(address(vault)).MorphoSetVaultConfig(IMorpho(BASE_MORPHO_VAULT));
+        MorphoStrategyFacet(address(vault)).MorphoSetVaultConfig(IMorpho(ARB_MORPHO_VAULT));
         AllocatorFacet(address(vault)).registerStrategy(MORPHO_ID, _morphoStrategyConfig());
         _setSingleAllocation(MORPHO_ID, 8000); // 80% to Morpho
         vm.stopPrank();
@@ -65,7 +74,7 @@ contract MorphoStrategyForkTest is Test {
     function test_DepositRebalanceDeploysToMorpho() public {
         _seedAndDeposit(alice, 1000 * 1e6);
 
-        assertEq(IERC20(BASE_USDC).balanceOf(address(vault)), 1000 * 1e6, "USDC sits idle pre-rebalance");
+        assertEq(IERC20(ARB_USDC).balanceOf(address(vault)), 1000 * 1e6, "USDC sits idle pre-rebalance");
 
         vm.roll(block.number + 1);
         vm.prank(owner);
@@ -74,7 +83,7 @@ contract MorphoStrategyForkTest is Test {
         // 80% routed to Morpho, 20% stays idle. Metamorpho shares are not 1:1
         // with assets, so the position is read in underlying units via the
         // facet's `morphoTotalAssets` (share-price NAV).
-        assertEq(IERC20(BASE_USDC).balanceOf(address(vault)), 200 * 1e6, "20% idle");
+        assertEq(IERC20(ARB_USDC).balanceOf(address(vault)), 200 * 1e6, "20% idle");
         assertApproxEqRel(
             MorphoStrategyFacet(address(vault)).morphoTotalAssets(),
             800 * 1e6,
@@ -92,11 +101,12 @@ contract MorphoStrategyForkTest is Test {
 
         uint256 navBefore = MorphoStrategyFacet(address(vault)).morphoTotalAssets();
 
-        // Roll forward ~30 days. Block time on Base is ~2s; 30 days ≈ 1_296_000
-        // blocks. Metamorpho's `totalAssets()` accrues market interest by
-        // timestamp, so the share-price NAV grows without any interaction.
+        // Roll forward ~30 days. Metamorpho's `totalAssets()` accrues market
+        // interest by timestamp, so the warp does the work and the share-price
+        // NAV grows without any interaction; the block roll just keeps
+        // block.number plausibly ahead.
         vm.warp(block.timestamp + 30 days);
-        vm.roll(block.number + 1_296_000);
+        vm.roll(block.number + 1_000_000);
 
         uint256 navAfter = MorphoStrategyFacet(address(vault)).morphoTotalAssets();
         assertGt(navAfter, navBefore, "Morpho position grew from supply interest");
@@ -121,7 +131,7 @@ contract MorphoStrategyForkTest is Test {
             MorphoStrategyFacet(address(vault)).morphoTotalAssets(), 0, 1, "Morpho position drained back to idle"
         );
         assertApproxEqRel(
-            IERC20(BASE_USDC).balanceOf(address(vault)), 1000 * 1e6, 1e15, "all assets back idle in the vault"
+            IERC20(ARB_USDC).balanceOf(address(vault)), 1000 * 1e6, 1e15, "all assets back idle in the vault"
         );
     }
 
@@ -143,7 +153,7 @@ contract MorphoStrategyForkTest is Test {
         uint256 assetsReturned = vault.redeem(redeemShares, alice, alice);
 
         assertGt(assetsReturned, 0, "alice received underlying");
-        assertEq(IERC20(BASE_USDC).balanceOf(alice), assetsReturned, "alice's wallet credited");
+        assertEq(IERC20(ARB_USDC).balanceOf(alice), assetsReturned, "alice's wallet credited");
         assertApproxEqAbs(
             MorphoStrategyFacet(address(vault)).morphoTotalAssets(),
             navBefore,
@@ -157,9 +167,9 @@ contract MorphoStrategyForkTest is Test {
     // -----------------------------------------------------------------------
 
     function _seedAndDeposit(address from, uint256 amount) internal {
-        deal(BASE_USDC, from, amount);
+        deal(ARB_USDC, from, amount);
         vm.startPrank(from);
-        IERC20(BASE_USDC).approve(address(vault), amount);
+        IERC20(ARB_USDC).approve(address(vault), amount);
         vault.deposit(amount, from);
         vm.stopPrank();
     }
@@ -202,7 +212,7 @@ contract MorphoStrategyForkTest is Test {
             facetAddress: address(morpho), action: IDiamond.FacetCutAction.Add, functionSelectors: _morphoSelectors()
         });
 
-        return new Vault(IERC20(BASE_USDC), "Vault Router", "vUSDC", owner, cuts, address(0), "");
+        return new Vault(IERC20(ARB_USDC), "Vault Router", "vUSDC", owner, cuts, address(0), "");
     }
 
     function _morphoStrategyConfig() internal pure returns (LibAllocator.StrategyConfig memory) {
