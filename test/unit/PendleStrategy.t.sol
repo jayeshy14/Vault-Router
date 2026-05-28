@@ -17,10 +17,11 @@ import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
 import { PendlePtStrategyFacet } from "../../src/facets/strategies/PendlePtStrategyFacet.sol";
 import { IPendleRouter } from "../../src/interfaces/external/IPendleRouter.sol";
 import { IPPrincipalToken } from "../../src/interfaces/external/IPPrincipalToken.sol";
+import { IPYLpOracle } from "../../src/interfaces/external/IPYLpOracle.sol";
 import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 import { LibDiamond } from "../../src/libraries/LibDiamond.sol";
 
-import { MockPrincipalToken, MockPendleRouter } from "../mocks/MockPendle.sol";
+import { MockPrincipalToken, MockPendleRouter, MockPYLpOracle } from "../mocks/MockPendle.sol";
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("USD Coin", "USDC") { }
@@ -45,6 +46,7 @@ contract PendleStrategyTest is Test {
     MockUSDC internal usdc;
     MockPrincipalToken internal pt;
     MockPendleRouter internal router;
+    MockPYLpOracle internal oracle;
     Vault internal vault;
 
     address internal owner = makeAddr("owner");
@@ -56,12 +58,14 @@ contract PendleStrategyTest is Test {
     uint256 internal expiry;
 
     bytes32 internal constant PENDLE_ID = bytes32("pendle");
+    uint32 internal constant TWAP = 900;
 
     function setUp() public {
         usdc = new MockUSDC();
         expiry = block.timestamp + 365 days;
         pt = new MockPrincipalToken(6, expiry, yt, sy);
         router = new MockPendleRouter(IERC20(address(usdc)), pt);
+        oracle = new MockPYLpOracle();
         vault = _deployVault();
         // The router needs underlying liquidity to settle sells / redemptions.
         usdc.mint(address(router), 100_000_000 * 1e6);
@@ -249,6 +253,77 @@ contract PendleStrategyTest is Test {
     }
 
     // -----------------------------------------------------------------------
+    // Oracle config — gating & validation
+    // -----------------------------------------------------------------------
+
+    function test_SetOracle_SetsAndEmits() public {
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit PendlePtStrategyFacet.PendleOracleSet(address(oracle), TWAP);
+
+        vm.prank(owner);
+        PendlePtStrategyFacet(address(vault)).pendleSetOracle(IPYLpOracle(address(oracle)), TWAP);
+
+        assertEq(address(PendlePtStrategyFacet(address(vault)).pendleOracle()), address(oracle), "oracle readable");
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTwapDuration(), TWAP, "twap readable");
+    }
+
+    function test_SetOracle_RevertsOnZeroOracle() public {
+        vm.prank(owner);
+        vm.expectRevert(PendlePtStrategyFacet.PendleInvalidOracle.selector);
+        PendlePtStrategyFacet(address(vault)).pendleSetOracle(IPYLpOracle(address(0)), TWAP);
+    }
+
+    function test_SetOracle_RevertsOnZeroDuration() public {
+        vm.prank(owner);
+        vm.expectRevert(PendlePtStrategyFacet.PendleInvalidOracle.selector);
+        PendlePtStrategyFacet(address(vault)).pendleSetOracle(IPYLpOracle(address(oracle)), 0);
+    }
+
+    function test_SetOracle_RevertsForNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotContractOwner.selector, alice, owner));
+        PendlePtStrategyFacet(address(vault)).pendleSetOracle(IPYLpOracle(address(oracle)), TWAP);
+    }
+
+    // -----------------------------------------------------------------------
+    // Total assets — mark-to-market vs face value
+    // -----------------------------------------------------------------------
+
+    function test_TotalAssets_MarksToMarketWhenOracleSet() public {
+        _configure();
+        _setOracle(0.95e18); // PT marked at a 5% discount pre-maturity
+        uint256 amount = 1000 * 1e6;
+        usdc.mint(address(vault), amount);
+        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+
+        // Face value is 1000 USDC, but the oracle marks it down to 950.
+        assertEq(pt.balanceOf(address(vault)), amount, "holds PT at face");
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 950 * 1e6, "marked to market via oracle");
+    }
+
+    function test_TotalAssets_FaceValueWhenNoOracle() public {
+        _configure();
+        uint256 amount = 1000 * 1e6;
+        usdc.mint(address(vault), amount);
+        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+
+        // No oracle configured -> face value fallback.
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), amount, "face value without oracle");
+    }
+
+    function test_TotalAssets_PostMaturityIgnoresOracle() public {
+        _configure();
+        _setOracle(0.95e18);
+        uint256 amount = 1000 * 1e6;
+        usdc.mint(address(vault), amount);
+        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+
+        vm.warp(expiry + 1); // PT now redeems 1:1 — oracle discount must be bypassed
+
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), amount, "face value post-maturity");
+    }
+
+    // -----------------------------------------------------------------------
     // Harvest — no-op (PT has no claimable rewards)
     // -----------------------------------------------------------------------
 
@@ -326,6 +401,12 @@ contract PendleStrategyTest is Test {
         vm.prank(owner);
         PendlePtStrategyFacet(address(vault))
             .pendleSetConfig(IPendleRouter(address(router)), market, IPPrincipalToken(address(pt)));
+    }
+
+    function _setOracle(uint256 rate) internal {
+        oracle.setRate(rate);
+        vm.prank(owner);
+        PendlePtStrategyFacet(address(vault)).pendleSetOracle(IPYLpOracle(address(oracle)), TWAP);
     }
 
     function _register() internal {
@@ -431,7 +512,7 @@ contract PendleStrategyTest is Test {
     }
 
     function _pendleSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](10);
+        s = new bytes4[](13);
         s[0] = PendlePtStrategyFacet.pendleSetConfig.selector;
         s[1] = PendlePtStrategyFacet.pendleTotalAssets.selector;
         s[2] = PendlePtStrategyFacet.pendleDeposit.selector;
@@ -442,5 +523,8 @@ contract PendleStrategyTest is Test {
         s[7] = PendlePtStrategyFacet.pendlePT.selector;
         s[8] = PendlePtStrategyFacet.pendleIsExpired.selector;
         s[9] = PendlePtStrategyFacet.pendleExpiry.selector;
+        s[10] = PendlePtStrategyFacet.pendleSetOracle.selector;
+        s[11] = PendlePtStrategyFacet.pendleOracle.selector;
+        s[12] = PendlePtStrategyFacet.pendleTwapDuration.selector;
     }
 }

@@ -5,6 +5,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import { IPendleRouter } from "../../src/interfaces/external/IPendleRouter.sol";
+import { IPYLpOracle } from "../../src/interfaces/external/IPYLpOracle.sol";
 
 /// @title MockPrincipalToken
 /// @notice Test-only stand-in for a Pendle PT. An ERC20 plus the maturity
@@ -130,5 +131,25 @@ contract MockPendleRouter is IPendleRouter {
         netTokenOut = netPyIn; // post-maturity PT redeems 1:1
         require(netTokenOut >= output.minTokenOut, "MockPendle: minTokenOut");
         asset.transfer(receiver, netTokenOut);
+    }
+}
+
+/// @title MockPYLpOracle
+/// @notice Test-only PendlePYLpOracle stand-in. Returns a settable PT->asset
+///         rate (1e18 = par; 0.95e18 = PT marked at a 5% discount) so tests can
+///         drive the facet's mark-to-market branch deterministically.
+contract MockPYLpOracle is IPYLpOracle {
+    uint256 public rate = 1e18;
+
+    function setRate(uint256 rate_) external {
+        rate = rate_;
+    }
+
+    function getPtToAssetRate(address, uint32) external view returns (uint256) {
+        return rate;
+    }
+
+    function getOracleState(address, uint32) external pure returns (bool, uint16, bool) {
+        return (false, 0, true);
     }
 }

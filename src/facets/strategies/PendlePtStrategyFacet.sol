@@ -8,6 +8,7 @@ import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import { LibDiamond } from "../../libraries/LibDiamond.sol";
 import { IPendleRouter } from "../../interfaces/external/IPendleRouter.sol";
 import { IPPrincipalToken } from "../../interfaces/external/IPPrincipalToken.sol";
+import { IPYLpOracle } from "../../interfaces/external/IPYLpOracle.sol";
 
 /// @title PendleStrategyFacet
 /// @notice Strategy facet that buys Pendle PT with the vault's underlying asset,
@@ -24,11 +25,14 @@ import { IPPrincipalToken } from "../../interfaces/external/IPPrincipalToken.sol
 ///      purchase. There are no claimable reward tokens; pendleHarvest is a no-op.
 ///
 ///      TOTAL ASSETS REPORTING
-///      Pre-maturity: reports PT face value (1:1 to underlying). This slightly
-///      overstates the immediately-realisable value because PT trades at a
-///      discount before expiry. A production deployment should replace this with
-///      a call to PendlePYLpOracle for accurate mark-to-market pricing.
-///      Post-maturity: face value equals redeemable value exactly.
+///      Pre-maturity: marks the PT position to market via PendlePYLpOracle
+///      (getPtToAssetRate), so the reported value reflects the discount PT
+///      trades at before expiry rather than its face value. If no oracle has
+///      been configured the facet falls back to face value (a slight
+///      overstatement) so the strategy still functions on markets without a
+///      seeded oracle.
+///      Post-maturity: PT redeems 1:1, so face value is exact and the oracle is
+///      bypassed.
 ///
 ///      WITHDRAWAL PATH
 ///      Pre-maturity:  PendleRouterV4.swapExactPtForToken  (sell on AMM)
@@ -55,12 +59,19 @@ contract PendlePtStrategyFacet {
     /// @notice Thrown when the requested withdrawal amount exceeds PT balance.
     error PendleInsufficientPt(uint256 requested, uint256 available);
 
+    /// @notice Thrown when the oracle is configured with a zero address or a
+    ///         zero TWAP duration.
+    error PendleInvalidOracle();
+
     // -----------------------------------------------------------------------
     // Events
     // -----------------------------------------------------------------------
 
     /// @notice Emitted when the facet is configured (or reconfigured).
     event PendleConfigSet(address indexed router, address indexed market, address indexed pt);
+
+    /// @notice Emitted when the mark-to-market oracle is set (or cleared).
+    event PendleOracleSet(address indexed oracle, uint32 twapDuration);
 
     // -----------------------------------------------------------------------
     // Storage
@@ -76,6 +87,11 @@ contract PendlePtStrategyFacet {
         address market;
         /// @notice The PT token this strategy holds.
         IPPrincipalToken pt;
+        /// @notice PendlePYLpOracle used to mark the PT position to market
+        ///         pre-maturity. Zero address => fall back to face value.
+        IPYLpOracle oracle;
+        /// @notice TWAP window (seconds) passed to the oracle.
+        uint32 twapDuration;
     }
 
     function _ps() internal pure returns (PendleStorage storage s) {
@@ -110,20 +126,53 @@ contract PendlePtStrategyFacet {
         emit PendleConfigSet(address(router), market, address(pt));
     }
 
+    /// @notice Set the PendlePYLpOracle and TWAP window used to mark the PT
+    ///         position to market pre-maturity.
+    /// @dev Owner-gated and orthogonal to pendleSetConfig — kept separate so a
+    ///      market can be wired up first and priced accurately once its oracle
+    ///      is seeded. Until this is called, pendleTotalAssets reports face
+    ///      value. The caller is responsible for confirming the market's oracle
+    ///      is ready (see IPYLpOracle.getOracleState) for the chosen duration.
+    /// @param oracle        PendlePYLpOracle address.
+    /// @param twapDuration  TWAP window in seconds (must be non-zero).
+    function pendleSetOracle(IPYLpOracle oracle, uint32 twapDuration) external {
+        LibDiamond.enforceIsContractOwner();
+        if (address(oracle) == address(0) || twapDuration == 0) revert PendleInvalidOracle();
+
+        PendleStorage storage s = _ps();
+        s.oracle = oracle;
+        s.twapDuration = twapDuration;
+
+        emit PendleOracleSet(address(oracle), twapDuration);
+    }
+
     // -----------------------------------------------------------------------
     // Strategy surface (pendle* prefix)
     // -----------------------------------------------------------------------
 
     /// @notice Current asset value of the Pendle position, denominated in the
     ///         vault's underlying asset.
-    /// @dev Returns PT face value (1:1 to underlying). Pre-maturity this is a
-    ///      slight overstatement because PT trades at a discount. Post-maturity
-    ///      it is exact — PT redeems 1:1.
-    ///      TODO: replace with PendlePYLpOracle call for accurate pre-maturity pricing.
+    /// @dev Pre-maturity, with an oracle configured: marks the PT balance to
+    ///      market via PendlePYLpOracle.getPtToAssetRate (rate scaled 1e18), so
+    ///      the discount PT trades at is reflected. Post-maturity, or when no
+    ///      oracle is set, returns PT face value — exact after expiry, a slight
+    ///      overstatement before it.
     function pendleTotalAssets() external view returns (uint256) {
         PendleStorage storage s = _ps();
         if (address(s.pt) == address(0)) return 0;
-        return s.pt.balanceOf(address(this));
+
+        uint256 ptBalance = s.pt.balanceOf(address(this));
+
+        // Face value when the position is empty, post-maturity (redeems 1:1),
+        // or no oracle is configured.
+        if (ptBalance == 0 || address(s.oracle) == address(0) || s.pt.isExpired()) {
+            return ptBalance;
+        }
+
+        // PT and the underlying asset share decimals in Pendle, so the 1e18
+        // rate converts the balance directly with no decimal adjustment.
+        uint256 rate = s.oracle.getPtToAssetRate(s.market, s.twapDuration);
+        return ptBalance * rate / 1e18;
     }
 
     /// @notice Buy PT with `amount` of the vault's underlying asset.
@@ -251,6 +300,14 @@ contract PendlePtStrategyFacet {
 
     function pendlePT() external view returns (IPPrincipalToken) {
         return _ps().pt;
+    }
+
+    function pendleOracle() external view returns (IPYLpOracle) {
+        return _ps().oracle;
+    }
+
+    function pendleTwapDuration() external view returns (uint32) {
+        return _ps().twapDuration;
     }
 
     function pendleIsExpired() external view returns (bool) {
