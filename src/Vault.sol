@@ -6,19 +6,20 @@ import { ERC4626 } from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import { IDiamond } from "./interfaces/IDiamond.sol";
-import { LibDiamond } from "./libraries/LibDiamond.sol";
+import { Diamond } from "./Diamond.sol";
 import { LibAllocator } from "./libraries/LibAllocator.sol";
 import { LibFees } from "./libraries/LibFees.sol";
 import { LibGuard } from "./libraries/LibGuard.sol";
 
 /// @title Vault Router is a modular ERC-4626 vault on the EIP-2535 Diamond pattern.
-/// @notice Vault.sol owns the ERC-4626 surface (deposit/withdraw/totalAssets) and
-///         acts as the Diamond proxy. Strategy logic, allocation policy, and
+/// @notice Vault owns the ERC-4626 surface (deposit/withdraw/totalAssets) plus the
+///         fee and circuit-breaker hooks. The diamond proxy mechanics live in the
+///         inherited Diamond base; strategy logic, allocation policy, and
 ///         harvesting live in facets attached via diamondCut.
 /// @dev Inflation attack mitigation comes from OZ ERC-4626's `_decimalsOffset`
-///      virtual shares. 
-contract Vault is ERC4626 {
-    error UnknownSelector(bytes4 selector);
+///      virtual shares. The ERC-4626 surface is native (non-facet) and therefore
+///      non-upgradeable, so it cannot be altered by a later diamondCut.
+contract Vault is Diamond, ERC4626 {
     error StrategyTotalAssetsCallFailed(bytes32 strategyId);
 
     constructor(
@@ -30,12 +31,10 @@ contract Vault is ERC4626 {
         address init_,
         bytes memory initCalldata_
     )
+        Diamond(initialOwner, diamondCut_, init_, initCalldata_)
         ERC20(name_, symbol_)
         ERC4626(asset_)
-    {
-        LibDiamond.setContractOwner(initialOwner);
-        LibDiamond.diamondCut(diamondCut_, init_, initCalldata_);
-    }
+    { }
 
     /// @dev 6 decimals of virtual shares, OZ's recommended inflation-attack
     ///      mitigation for ERC-4626 vaults. Sourced from LibGuard so the breaker's
@@ -156,24 +155,4 @@ contract Vault is ERC4626 {
         f.lastFeeAccrual = nowTs;
         if (feeShares > 0) _mint(f.feeRecipient, feeShares);
     }
-
-    fallback() external payable {
-        LibDiamond.DiamondStorage storage ds;
-        bytes32 position = LibDiamond.DIAMOND_STORAGE_POSITION;
-        assembly {
-            ds.slot := position
-        }
-        address facet = ds.selectorToFacetAndPosition[msg.sig].facetAddress;
-        if (facet == address(0)) revert UnknownSelector(msg.sig);
-        assembly {
-            calldatacopy(0, 0, calldatasize())
-            let result := delegatecall(gas(), facet, 0, calldatasize(), 0, 0)
-            returndatacopy(0, 0, returndatasize())
-            switch result
-            case 0 { revert(0, returndatasize()) }
-            default { return(0, returndatasize()) }
-        }
-    }
-
-    receive() external payable { }
 }
