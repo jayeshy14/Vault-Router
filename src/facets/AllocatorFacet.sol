@@ -5,6 +5,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 import { LibDiamond } from "../libraries/LibDiamond.sol";
+import { LibRoles } from "../libraries/LibRoles.sol";
 import { LibAllocator } from "../libraries/LibAllocator.sol";
 
 /// @title AllocatorFacet
@@ -35,8 +36,11 @@ contract AllocatorFacet {
     event Rebalanced(uint256 totalAssets, uint256 idleAfter);
 
     // -----------------------------------------------------------------------
-    // Curator-gated setters
+    // Owner-gated governance / risk bounds
     // -----------------------------------------------------------------------
+    // Registering strategies and setting caps / idle floor define the bounds the
+    // curator must operate within, so they stay owner-only. `setAllocation` (a
+    // policy choice within those bounds) and `rebalance` are curator-gated below.
 
     function registerStrategy(bytes32 strategyId, LibAllocator.StrategyConfig calldata config) external {
         LibDiamond.enforceIsContractOwner();
@@ -77,8 +81,12 @@ contract AllocatorFacet {
         emit StrategyRemoved(strategyId);
     }
 
+    // -----------------------------------------------------------------------
+    // Curator-gated operations (allocation policy within owner-set bounds)
+    // -----------------------------------------------------------------------
+
     function setAllocation(bytes32[] calldata strategyIds, uint16[] calldata bps) external {
-        LibDiamond.enforceIsContractOwner();
+        LibRoles.enforceIsCurator();
         if (strategyIds.length != bps.length) revert AllocationLengthMismatch(strategyIds.length, bps.length);
 
         LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
@@ -139,7 +147,7 @@ contract AllocatorFacet {
     ///      cap is enforced upstream in `setAllocation`; the idle-reserve floor
     ///      follows automatically from `total + idleReserveBps ≤ 10_000`.
     function rebalance() external {
-        LibDiamond.enforceIsContractOwner();
+        LibRoles.enforceIsCurator();
         LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
         if (block.number <= uint256(s.lastRebalanceBlock)) {
             revert RebalanceTooSoon(uint256(s.lastRebalanceBlock), block.number);
