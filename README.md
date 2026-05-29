@@ -32,9 +32,11 @@ All facet state is isolated using EIP-7201 namespaced storage — no storage col
 
 | Role | Permissions |
 |------|-------------|
-| **Owner** | Add / remove / replace facets via `diamondCut` |
-| **Curator** | Register strategies, set allocations, trigger rebalance and harvest |
+| **Owner** | Add / remove / replace facets via `diamondCut`, register / remove strategies, set caps + idle floor, configure fees, appoint / revoke curators |
+| **Curator** | Set allocations, trigger rebalance and harvest — **within** the bounds the owner sets |
 | **User** | Deposit / withdraw underlying asset |
+
+The curator is a deliberately low-privilege operational key: it can move capital only between owner-allow-listed strategies and only within owner-set caps and the idle floor — it can never upgrade facets, change fees, or withdraw funds. This separation is what makes it safe to delegate day-to-day rebalancing to an automated operator (e.g. an off-chain agent) without exposing the vault to it. Owners are implicitly curators, so governance can always operate the vault directly.
 
 ## Strategies
 

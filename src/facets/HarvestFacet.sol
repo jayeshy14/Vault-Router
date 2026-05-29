@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { LibDiamond } from "../libraries/LibDiamond.sol";
+import { LibRoles } from "../libraries/LibRoles.sol";
 import { LibAllocator } from "../libraries/LibAllocator.sol";
 
 /// @title HarvestFacet
@@ -23,7 +23,7 @@ contract HarvestFacet {
     ///      `harvestSelector` — useful for protocols where rewards auto-accrue
     ///      (Aave aTokens, Morpho lender shares) and no explicit claim is needed.
     function harvest(bytes32 strategyId) external {
-        LibDiamond.enforceIsContractOwner();
+        LibRoles.enforceIsCurator();
         LibAllocator.StrategyConfig memory cfg = LibAllocator.allocatorStorage().configs[strategyId];
         if (!cfg.active) revert StrategyNotRegistered(strategyId);
         if (cfg.harvestSelector != bytes4(0)) {
@@ -42,7 +42,7 @@ contract HarvestFacet {
 
     /// @notice Harvest every registered strategy in registration order.
     function harvestAll() external {
-        LibDiamond.enforceIsContractOwner();
+        LibRoles.enforceIsCurator();
         LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
         uint256 n = s.strategyIds.length;
         for (uint256 i; i < n; i++) {
