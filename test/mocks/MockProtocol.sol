@@ -35,4 +35,11 @@ contract MockProtocol {
         IMintable(address(asset)).mint(address(this), amount);
         balanceOf[account] += amount;
     }
+
+    /// @notice Test-only — debits `account`'s internal balance to simulate a
+    ///         strategy loss (exploit, bad debt, depeg). The reported position
+    ///         drops, dragging the vault's totalAssets and share price down.
+    function _testSimulateLoss(address account, uint256 amount) external {
+        balanceOf[account] -= amount;
+    }
 }

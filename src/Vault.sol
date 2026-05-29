@@ -9,13 +9,14 @@ import { IDiamond } from "./interfaces/IDiamond.sol";
 import { LibDiamond } from "./libraries/LibDiamond.sol";
 import { LibAllocator } from "./libraries/LibAllocator.sol";
 import { LibFees } from "./libraries/LibFees.sol";
+import { LibGuard } from "./libraries/LibGuard.sol";
 
-/// @title Vault Router — modular ERC-4626 vault on the EIP-2535 Diamond pattern.
+/// @title Vault Router is a modular ERC-4626 vault on the EIP-2535 Diamond pattern.
 /// @notice Vault.sol owns the ERC-4626 surface (deposit/withdraw/totalAssets) and
 ///         acts as the Diamond proxy. Strategy logic, allocation policy, and
 ///         harvesting live in facets attached via diamondCut.
 /// @dev Inflation attack mitigation comes from OZ ERC-4626's `_decimalsOffset`
-///      virtual shares, not the literal 1 wei dead deposit pattern.
+///      virtual shares. 
 contract Vault is ERC4626 {
     error UnknownSelector(bytes4 selector);
     error StrategyTotalAssetsCallFailed(bytes32 strategyId);
@@ -36,26 +37,27 @@ contract Vault is ERC4626 {
         LibDiamond.diamondCut(diamondCut_, init_, initCalldata_);
     }
 
-    /// @dev 6 decimals of virtual shares — OZ's recommended inflation-attack
-    ///      mitigation for ERC-4626 vaults.
+    /// @dev 6 decimals of virtual shares, OZ's recommended inflation-attack
+    ///      mitigation for ERC-4626 vaults. Sourced from LibGuard so the breaker's
+    ///      share-price math and this offset can never drift apart.
     function _decimalsOffset() internal pure override returns (uint8) {
-        return 6;
+        return LibGuard.DECIMALS_OFFSET;
     }
 
     /// @notice Total assets under management = idle vault balance + sum of every
     ///         registered strategy's reported position.
     /// @dev Self-staticcalls each strategy's totalAssets selector via the diamond
     ///      fallback. When no strategies are registered the result equals the
-    ///      vault's idle USDC balance (default ERC-4626 behaviour).
+    ///      vault's idle USDC balance (default ERC-4626 behavior).
     function totalAssets() public view override returns (uint256) {
         uint256 total = IERC20(asset()).balanceOf(address(this));
-        LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
-        uint256 n = s.strategyIds.length;
-        for (uint256 i; i < n; i++) {
-            bytes32 id = s.strategyIds[i];
-            LibAllocator.StrategyConfig storage cfg = s.configs[id];
-            if (!cfg.active) continue;
-            (bool ok, bytes memory data) = address(this).staticcall(abi.encodeWithSelector(cfg.totalAssetsSelector));
+        LibAllocator.AllocatorStorage storage $ = LibAllocator.allocatorStorage();
+        uint256 length = $.strategyIds.length;
+        for (uint256 i; i < length; i++) {
+            bytes32 id = $.strategyIds[i];
+            LibAllocator.StrategyConfig storage configs = $.configs[id];
+            if (!configs.active) continue;
+            (bool ok, bytes memory data) = address(this).staticcall(abi.encodeWithSelector(configs.totalAssetsSelector));
             if (!ok) revert StrategyTotalAssetsCallFailed(id);
             total += abi.decode(data, (uint256));
         }
@@ -67,6 +69,9 @@ contract Vault is ERC4626 {
     // -----------------------------------------------------------------------
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
+        // Circuit breaker: revert if paused, or if the current share price has
+        // moved beyond the configured bound since the last checkpoint.
+        _guard();
         // Pre-accrue so the new depositor doesn't dilute the perf-fee owed on
         // yield earned by existing holders. No-op on the very first deposit
         // (supply == 0 → early return).
@@ -87,9 +92,23 @@ contract Vault is ERC4626 {
         internal
         override
     {
+        _guard();
         _accrueFees();
         super._withdraw(caller, receiver, owner, assets, shares);
         _accrueFees();
+    }
+
+    /// @dev NAV circuit-breaker tripwire run on every deposit/withdraw. Reverts
+    ///      when the breaker is latched (`EnforcedPause`) or when the live share
+    ///      price deviates beyond the owner-set bound (`SharePriceDeviation`),
+    ///      otherwise advances the checkpoint. Runs independently of fee accrual
+    ///      so it is enforced even when no fee recipient is configured.
+    function _guard() internal {
+        LibGuard.GuardStorage storage g = LibGuard.guardStorage();
+        if (g.paused) revert LibGuard.EnforcedPause();
+        uint256 supply = totalSupply();
+        if (supply == 0) return; // nothing to price yet; breaker arms on the next op
+        LibGuard.checkpoint(g, LibGuard.sharePrice(totalAssets(), supply));
     }
 
     /// @dev Mints performance + management fee shares to the configured recipient.
@@ -111,8 +130,7 @@ contract Vault is ERC4626 {
         }
 
         uint256 ta = totalAssets();
-        uint256 effectiveSupply = supply + 10 ** _decimalsOffset();
-        uint256 sharePrice = ((ta + 1) * 1e18) / effectiveSupply;
+        uint256 sharePrice = LibGuard.sharePrice(ta, supply);
 
         if (f.highWaterMark == 0) f.highWaterMark = sharePrice;
         if (f.lastFeeAccrual == 0) f.lastFeeAccrual = nowTs;

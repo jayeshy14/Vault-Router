@@ -55,6 +55,25 @@ New strategies are added as facets and registered through the curator, no vault 
 - Performance fee gated by High Water Mark, fees only taken on net gains
 - Management fee accrues linearly (capped at 10% annually)
 - Slippage protection on strategy deposits
+- NAV circuit breaker — bounds how far the share price may move between checkpoints
+
+### NAV circuit breaker
+
+The vault prices its shares on-chain (idle balance + each strategy's reported
+position). To contain a bad rebalance, oracle glitch, or strategy exploit, the
+owner sets `maxSharePriceDeltaBps` — the maximum share-price move tolerated
+between checkpoints. Two enforcement paths:
+
+- **Hot-path tripwire** — every deposit/withdraw re-prices the vault and reverts
+  (`SharePriceDeviation`) if the move exceeds the bound, so users never transact
+  at an anomalous NAV. Self-healing: once the price is back in band, ops resume.
+- **Latching poke** — anyone (a keeper or the curator agent) can call
+  `guardCheckpoint()`; on a breach it latches the vault into a paused state that
+  persists until the owner reviews and `unpause()`s. A revert can't latch a pause
+  in the same call, so this dedicated poke is what makes the auto-pause stick.
+
+The owner can also `pause()` / `unpause()` manually. With the bound set to `0` the
+deviation check is disabled and only manual pause applies.
 
 ## Fees
 
