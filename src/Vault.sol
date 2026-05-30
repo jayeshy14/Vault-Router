@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { ERC4626 } from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { IDiamond } from "./interfaces/IDiamond.sol";
 import { Diamond } from "./Diamond.sol";
@@ -19,7 +21,7 @@ import { LibGuard } from "./libraries/LibGuard.sol";
 /// @dev Inflation attack mitigation comes from OZ ERC-4626's `_decimalsOffset`
 ///      virtual shares. The ERC-4626 surface is native (non-facet) and therefore
 ///      non-upgradeable, so it cannot be altered by a later diamondCut.
-contract Vault is Diamond, ERC4626 {
+contract Vault is Diamond, ERC4626, ReentrancyGuard {
     error StrategyTotalAssetsCallFailed(bytes32 strategyId);
 
     constructor(
@@ -70,7 +72,7 @@ contract Vault is Diamond, ERC4626 {
     // Fee-accrual hooks
     // -----------------------------------------------------------------------
 
-    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant {
         // Circuit breaker: revert if paused, or if the current share price has
         // moved beyond the configured bound since the last checkpoint.
         _guard();
@@ -93,6 +95,7 @@ contract Vault is Diamond, ERC4626 {
     )
         internal
         override
+        nonReentrant
     {
         _guard();
         _accrueFees();
@@ -148,10 +151,13 @@ contract Vault is Diamond, ERC4626 {
 
         // Performance fee — proportional to share-price gain above HWM.
         if (f.performanceFeeBps > 0 && sharePrice > f.highWaterMark) {
+            // Full-precision mulDiv throughout: each step multiplies at 512-bit
+            // width before dividing, so no intermediate truncation feeds the next
+            // multiplication (fixes the divide-before-multiply rounding).
             uint256 profitPerShare = sharePrice - f.highWaterMark;
-            uint256 profitValue = (profitPerShare * supply) / 1e18;
-            uint256 feeValue = (profitValue * uint256(f.performanceFeeBps)) / LibFees.BPS_DENOMINATOR;
-            if (ta > 0) feeShares += (feeValue * supply) / ta;
+            uint256 profitValue = Math.mulDiv(profitPerShare, supply, 1e18);
+            uint256 feeValue = Math.mulDiv(profitValue, uint256(f.performanceFeeBps), LibFees.BPS_DENOMINATOR);
+            if (ta > 0) feeShares += Math.mulDiv(feeValue, supply, ta);
             f.highWaterMark = sharePrice;
         }
 

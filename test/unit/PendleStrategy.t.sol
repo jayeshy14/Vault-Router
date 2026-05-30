@@ -198,6 +198,52 @@ contract PendleStrategyTest is Test {
         PendlePtStrategyFacet(address(vault)).pendleDeposit(1000 * 1e6);
     }
 
+    function test_Deposit_RevertsWhenFillBelowOracleSlippageBound() public {
+        _configure();
+        _setOracle(0.95e18); // oracle: 1 PT = 0.95 USDC -> a buy should yield ~1.053x PT
+        uint256 amount = 1000 * 1e6;
+        usdc.mint(address(vault), amount);
+
+        // Router fills at par (1000 PT) — ~5% worse than the oracle-implied amount,
+        // beyond the default 1% tolerance. The router enforces our derived minPtOut.
+        vm.expectRevert("MockPendle: minPtOut");
+        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+    }
+
+    function test_Deposit_SucceedsWhenFillWithinOracleSlippageBound() public {
+        _configure();
+        _setOracle(0.95e18);
+        router.setDepositRateBps(10_500); // 1050 PT, within 1% of the ~1052.6 oracle mark
+        uint256 amount = 1000 * 1e6;
+        usdc.mint(address(vault), amount);
+
+        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        assertEq(pt.balanceOf(address(vault)), (amount * 10_500) / 10_000, "fill within tolerance accepted");
+    }
+
+    // -----------------------------------------------------------------------
+    // Slippage config — gating & validation
+    // -----------------------------------------------------------------------
+
+    function test_SetSlippage_SetsAndEmits() public {
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit PendlePtStrategyFacet.PendleSlippageSet(250);
+        vm.prank(owner);
+        PendlePtStrategyFacet(address(vault)).pendleSetSlippage(250);
+    }
+
+    function test_SetSlippage_RevertsAboveBps() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(PendlePtStrategyFacet.PendleInvalidSlippage.selector, 10_001));
+        PendlePtStrategyFacet(address(vault)).pendleSetSlippage(10_001);
+    }
+
+    function test_SetSlippage_RevertsForNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotContractOwner.selector, alice, owner));
+        PendlePtStrategyFacet(address(vault)).pendleSetSlippage(100);
+    }
+
     // -----------------------------------------------------------------------
     // Withdraw — pre-maturity (sell on AMM) vs post-maturity (redeem 1:1)
     // -----------------------------------------------------------------------
@@ -252,6 +298,30 @@ contract PendleStrategyTest is Test {
         PendlePtStrategyFacet(address(vault)).pendleWithdraw(400 * 1e6);
     }
 
+    function test_Withdraw_RevertsWhenAmmHaircutExceedsSlippageBound() public {
+        _configure();
+        uint256 amount = 1000 * 1e6;
+        usdc.mint(address(vault), amount);
+        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _setOracle(1e18); // par mark: minTokenOut derived as 99% of PT sold
+
+        router.setWithdrawHaircutBps(500); // 5% AMM haircut, beyond the 1% tolerance
+        vm.expectRevert("MockPendle: minTokenOut");
+        PendlePtStrategyFacet(address(vault)).pendleWithdraw(400 * 1e6);
+    }
+
+    function test_Withdraw_SucceedsWhenHaircutWithinSlippageBound() public {
+        _configure();
+        uint256 amount = 1000 * 1e6;
+        usdc.mint(address(vault), amount);
+        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _setOracle(1e18);
+
+        router.setWithdrawHaircutBps(50); // 0.5% haircut, within the 1% tolerance
+        PendlePtStrategyFacet(address(vault)).pendleWithdraw(400 * 1e6);
+        assertEq(usdc.balanceOf(address(vault)), (400 * 1e6 * 9950) / 10_000, "fill within tolerance settled");
+    }
+
     // -----------------------------------------------------------------------
     // Oracle config — gating & validation
     // -----------------------------------------------------------------------
@@ -291,10 +361,14 @@ contract PendleStrategyTest is Test {
 
     function test_TotalAssets_MarksToMarketWhenOracleSet() public {
         _configure();
-        _setOracle(0.95e18); // PT marked at a 5% discount pre-maturity
         uint256 amount = 1000 * 1e6;
         usdc.mint(address(vault), amount);
+        // Acquire the position at par, then mark it down. The oracle drives
+        // totalAssets() valuation, not deposit execution, so it is set after the
+        // buy — a discounted mark against a par fill would otherwise (correctly)
+        // trip pendleDeposit's slippage guard.
         PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _setOracle(0.95e18); // PT marked at a 5% discount pre-maturity
 
         // Face value is 1000 USDC, but the oracle marks it down to 950.
         assertEq(pt.balanceOf(address(vault)), amount, "holds PT at face");
@@ -313,10 +387,10 @@ contract PendleStrategyTest is Test {
 
     function test_TotalAssets_PostMaturityIgnoresOracle() public {
         _configure();
-        _setOracle(0.95e18);
         uint256 amount = 1000 * 1e6;
         usdc.mint(address(vault), amount);
         PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _setOracle(0.95e18); // set after the buy; see MarksToMarketWhenOracleSet
 
         vm.warp(expiry + 1); // PT now redeems 1:1 — oracle discount must be bypassed
 
@@ -512,7 +586,7 @@ contract PendleStrategyTest is Test {
     }
 
     function _pendleSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](13);
+        s = new bytes4[](14);
         s[0] = PendlePtStrategyFacet.pendleSetConfig.selector;
         s[1] = PendlePtStrategyFacet.pendleTotalAssets.selector;
         s[2] = PendlePtStrategyFacet.pendleDeposit.selector;
@@ -526,5 +600,6 @@ contract PendleStrategyTest is Test {
         s[10] = PendlePtStrategyFacet.pendleSetOracle.selector;
         s[11] = PendlePtStrategyFacet.pendleOracle.selector;
         s[12] = PendlePtStrategyFacet.pendleTwapDuration.selector;
+        s[13] = PendlePtStrategyFacet.pendleSetSlippage.selector;
     }
 }

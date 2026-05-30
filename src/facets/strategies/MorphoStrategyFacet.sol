@@ -114,7 +114,11 @@ contract MorphoStrategyFacet {
     function morphoWithdraw(uint256 amount) external {
         MorphoStorage storage s = _ms();
         if (address(s.vault) == address(0)) revert MorphoVaultNotConfigured();
-        s.vault.withdraw(amount, address(this), address(this));
+        // Bound the shares burned: burning more than previewWithdraw predicted
+        // means a worse-than-quoted price. Mirrors the morphoDeposit slippage check.
+        uint256 expected = s.vault.previewWithdraw(amount);
+        uint256 shares = s.vault.withdraw(amount, address(this), address(this));
+        if (shares > expected) revert MorphoSlippage(expected, shares);
     }
 
     /// @notice No-op for Metamorpho — supply yield auto-compounds into the
