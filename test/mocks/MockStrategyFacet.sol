@@ -17,6 +17,7 @@ contract MockStrategyFacet {
     struct MockStorage {
         MockProtocol protocol;
         uint256 harvestCount;
+        bool reverting;
     }
 
     function _ms() internal pure returns (MockStorage storage s) {
@@ -34,7 +35,14 @@ contract MockStrategyFacet {
         return _ms().protocol;
     }
 
+    /// @notice Test-only — when set, the strategy's totalAssets and harvest revert,
+    ///         simulating a failing/exploited/stuck underlying protocol.
+    function mockSetReverting(bool v) external {
+        _ms().reverting = v;
+    }
+
     function mockTotalAssets() external view returns (uint256) {
+        if (_ms().reverting) revert("mock: totalAssets reverted");
         MockProtocol p = _ms().protocol;
         if (address(p) == address(0)) return 0;
         return p.balanceOf(address(this));
@@ -52,6 +60,7 @@ contract MockStrategyFacet {
     }
 
     function mockHarvest() external {
+        if (_ms().reverting) revert("mock: harvest reverted");
         _ms().harvestCount += 1;
     }
 

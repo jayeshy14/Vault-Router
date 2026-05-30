@@ -56,6 +56,23 @@ New strategies are added as facets and registered through the curator, no vault 
 - Management fee accrues linearly (capped at 10% annually)
 - Slippage protection on strategy deposits
 - NAV circuit breaker — bounds how far the share price may move between checkpoints
+- Strategy quarantine — isolate a failing strategy so it can't brick the vault
+
+### Strategy quarantine
+
+The vault prices itself by summing each strategy's reported position. If one
+strategy's read reverts (a failing, exploited, or stuck protocol), it would
+otherwise brick `totalAssets` — and with it every deposit, withdrawal, and fee
+accrual vault-wide. The owner can `quarantineStrategy(id)` to isolate it:
+
+- excluded from `totalAssets` (valued at zero — conservative over trusting a
+  stale or manipulable reading),
+- skipped by the rebalancer and `harvestAll`, and its target allocation zeroed,
+
+so the rest of the vault keeps operating. Funds already in the strategy stay put,
+untouched, until `releaseStrategy(id)` lifts the quarantine once it is healthy
+again. Failures are loud by default — a non-quarantined strategy that reverts
+still halts the vault, so isolation is always a deliberate, audited owner action.
 
 ### NAV circuit breaker
 
