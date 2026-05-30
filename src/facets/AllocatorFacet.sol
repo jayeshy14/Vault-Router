@@ -26,6 +26,9 @@ contract AllocatorFacet {
     error StrategyTotalAssetsCallFailed(bytes32 strategyId);
     error StrategyCallFailed(bytes32 strategyId, bytes4 selector);
     error RebalanceTooSoon(uint256 lastBlock, uint256 currentBlock);
+    error StrategyAlreadyQuarantined(bytes32 strategyId);
+    error StrategyNotQuarantined(bytes32 strategyId);
+    error AllocationToQuarantined(bytes32 strategyId);
 
     event StrategyRegistered(bytes32 indexed strategyId, LibAllocator.StrategyConfig config);
     event StrategyRemoved(bytes32 indexed strategyId);
@@ -34,6 +37,8 @@ contract AllocatorFacet {
     event StrategyCapSet(bytes32 indexed strategyId, uint16 capBps);
     event GlobalStrategyCapSet(uint16 capBps);
     event Rebalanced(uint256 totalAssets, uint256 idleAfter);
+    event StrategyQuarantined(bytes32 indexed strategyId);
+    event StrategyReleased(bytes32 indexed strategyId);
 
     // -----------------------------------------------------------------------
     // Owner-gated governance / risk bounds
@@ -103,6 +108,7 @@ contract AllocatorFacet {
             bytes32 id = strategyIds[i];
             uint16 b = bps[i];
             if (!s.configs[id].active) revert StrategyNotRegistered(id);
+            if (s.quarantined[id] && b > 0) revert AllocationToQuarantined(id);
             if (b > LibAllocator.BPS_DENOMINATOR) revert InvalidBps(b);
             uint16 cap = _effectiveCap(s, id);
             if (b > cap) revert AllocationExceedsCap(id, cap, b);
@@ -137,6 +143,38 @@ contract AllocatorFacet {
         emit GlobalStrategyCapSet(capBps);
     }
 
+    /// @notice Isolate a strategy whose accounting can no longer be trusted (a
+    ///         failing, exploited, or stuck protocol). A quarantined strategy is
+    ///         excluded from `totalAssets` and skipped by the rebalancer and
+    ///         harvester, so its failure can never brick deposits, withdrawals,
+    ///         or fee accrual for the rest of the vault.
+    /// @dev Owner-only — it changes how vault NAV is computed. The strategy's
+    ///      target is zeroed so the rebalancer stops funding it. Funds already in
+    ///      the strategy stay there (untouched and unvalued) until it is released;
+    ///      valuing them at zero is the conservative choice over trusting a stale
+    ///      or manipulable reading.
+    function quarantineStrategy(bytes32 strategyId) external {
+        LibDiamond.enforceIsContractOwner();
+        LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
+        if (!s.configs[strategyId].active) revert StrategyNotRegistered(strategyId);
+        if (s.quarantined[strategyId]) revert StrategyAlreadyQuarantined(strategyId);
+        s.quarantined[strategyId] = true;
+        s.targetBps[strategyId] = 0;
+        emit StrategyQuarantined(strategyId);
+    }
+
+    /// @notice Lift quarantine once a strategy is healthy again; its position is
+    ///         counted in NAV and it becomes rebalanceable once more.
+    /// @dev Owner-only. Re-funding it requires a fresh `setAllocation`, since the
+    ///      target was zeroed on quarantine.
+    function releaseStrategy(bytes32 strategyId) external {
+        LibDiamond.enforceIsContractOwner();
+        LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
+        if (!s.quarantined[strategyId]) revert StrategyNotQuarantined(strategyId);
+        s.quarantined[strategyId] = false;
+        emit StrategyReleased(strategyId);
+    }
+
     // -----------------------------------------------------------------------
     // Rebalance
     // -----------------------------------------------------------------------
@@ -158,7 +196,11 @@ contract AllocatorFacet {
         uint256[] memory currentAssets = new uint256[](n);
         uint256 totalCached = _idleAssetsInternal();
         for (uint256 i; i < n; i++) {
-            uint256 cur = _strategyTotalAssetsInternal(s.configs[s.strategyIds[i]], s.strategyIds[i]);
+            bytes32 id = s.strategyIds[i];
+            // Isolated: never read (the read may revert) or fund a quarantined
+            // strategy. currentAssets[i] stays 0, so both passes skip it too.
+            if (s.quarantined[id]) continue;
+            uint256 cur = _strategyTotalAssetsInternal(s.configs[id], id);
             currentAssets[i] = cur;
             totalCached += cur;
         }
@@ -166,6 +208,7 @@ contract AllocatorFacet {
         // Pass 1: withdraw from over-target strategies.
         for (uint256 i; i < n; i++) {
             bytes32 id = s.strategyIds[i];
+            if (s.quarantined[id]) continue;
             uint256 target = (totalCached * uint256(s.targetBps[id])) / LibAllocator.BPS_DENOMINATOR;
             if (currentAssets[i] > target) {
                 uint256 delta = currentAssets[i] - target;
@@ -176,6 +219,7 @@ contract AllocatorFacet {
         // Pass 2: deposit into under-target strategies.
         for (uint256 i; i < n; i++) {
             bytes32 id = s.strategyIds[i];
+            if (s.quarantined[id]) continue;
             uint256 target = (totalCached * uint256(s.targetBps[id])) / LibAllocator.BPS_DENOMINATOR;
             if (currentAssets[i] < target) {
                 uint256 delta = target - currentAssets[i];
@@ -231,6 +275,10 @@ contract AllocatorFacet {
 
     function lastRebalanceBlock() external view returns (uint64) {
         return LibAllocator.allocatorStorage().lastRebalanceBlock;
+    }
+
+    function isQuarantined(bytes32 strategyId) external view returns (bool) {
+        return LibAllocator.allocatorStorage().quarantined[strategyId];
     }
 
     // -----------------------------------------------------------------------

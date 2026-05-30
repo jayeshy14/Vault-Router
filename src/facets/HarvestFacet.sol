@@ -49,6 +49,7 @@ contract HarvestFacet {
             bytes32 id = s.strategyIds[i];
             LibAllocator.StrategyConfig memory cfg = s.configs[id];
             if (!cfg.active) continue;
+            if (s.quarantined[id]) continue; // isolated: don't let a failing strategy break harvestAll
             if (cfg.harvestSelector != bytes4(0)) {
                 (bool ok, bytes memory ret) = address(this).call(abi.encodeWithSelector(cfg.harvestSelector));
                 if (!ok) {

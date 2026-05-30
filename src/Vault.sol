@@ -56,6 +56,9 @@ contract Vault is Diamond, ERC4626 {
             bytes32 id = $.strategyIds[i];
             LibAllocator.StrategyConfig storage configs = $.configs[id];
             if (!configs.active) continue;
+            // Isolated strategy: excluded from NAV so a single failing protocol
+            // cannot brick deposits, withdrawals, or fee accrual vault-wide.
+            if ($.quarantined[id]) continue;
             (bool ok, bytes memory data) = address(this).staticcall(abi.encodeWithSelector(configs.totalAssetsSelector));
             if (!ok) revert StrategyTotalAssetsCallFailed(id);
             total += abi.decode(data, (uint256));

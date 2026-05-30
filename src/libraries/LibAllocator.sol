@@ -34,6 +34,11 @@ library LibAllocator {
         uint16 idleReserveBps;
         uint16 globalMaxStrategyCapBps;
         uint64 lastRebalanceBlock;
+        /// @dev Strategies flagged here are isolated: excluded from NAV and
+        ///      skipped by the rebalancer/harvester, so a single failing protocol
+        ///      cannot brick the whole vault. Owner-controlled risk state, kept
+        ///      out of StrategyConfig so it is dynamic rather than static config.
+        mapping(bytes32 => bool) quarantined;
     }
 
     function allocatorStorage() internal pure returns (AllocatorStorage storage s) {
