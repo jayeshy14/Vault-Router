@@ -16,6 +16,7 @@ import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
 import { IdleStrategyFacet } from "../../src/facets/strategies/IdleStrategyFacet.sol";
 import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
 import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
+import { LibDiamond } from "../../src/libraries/LibDiamond.sol";
 
 import { MockProtocol } from "../mocks/MockProtocol.sol";
 import { MockStrategyFacet } from "../mocks/MockStrategyFacet.sol";
@@ -224,6 +225,94 @@ contract AllocatorTest is Test {
     }
 
     // -----------------------------------------------------------------------
+    // setMaxRebalanceDelta — gating & validation
+    // -----------------------------------------------------------------------
+
+    function test_SetMaxRebalanceDelta_SetsAndEmits() public {
+        vm.expectEmit(false, false, false, true, address(vault));
+        emit AllocatorFacet.MaxRebalanceDeltaSet(3000);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).setMaxRebalanceDelta(3000);
+        assertEq(AllocatorFacet(address(vault)).maxRebalanceDelta(), 3000, "stored and readable");
+    }
+
+    function test_SetMaxRebalanceDelta_AllowsUpToTwiceBps() public {
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).setMaxRebalanceDelta(20_000); // full reshuffle = 2x NAV churn
+        assertEq(AllocatorFacet(address(vault)).maxRebalanceDelta(), 20_000);
+    }
+
+    function test_SetMaxRebalanceDelta_RevertsAboveTwiceBps() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(AllocatorFacet.InvalidBps.selector, 20_001));
+        AllocatorFacet(address(vault)).setMaxRebalanceDelta(20_001);
+    }
+
+    function test_SetMaxRebalanceDelta_RevertsForNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotContractOwner.selector, alice, owner));
+        AllocatorFacet(address(vault)).setMaxRebalanceDelta(3000);
+    }
+
+    function test_MaxRebalanceDelta_DefaultsToZeroDisabled() public view {
+        assertEq(AllocatorFacet(address(vault)).maxRebalanceDelta(), 0, "off by default");
+    }
+
+    // -----------------------------------------------------------------------
+    // rebalance — per-call churn bound
+    // -----------------------------------------------------------------------
+
+    function test_Rebalance_RevertsWhenMovementExceedsBound() public {
+        _depositToVault(alice, 1000 * 1e6);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).setMaxRebalanceDelta(5000); // cap churn at 50% of NAV
+        _setSingleAllocation(MOCK_ID, 8000); // wants to move 80% (0 -> 800) in one go
+
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        // 800 moved / 1000 NAV = 8000 bps > 5000 bound.
+        vm.expectRevert(abi.encodeWithSelector(AllocatorFacet.RebalanceDeltaTooLarge.selector, 8000, 5000));
+        AllocatorFacet(address(vault)).rebalance();
+
+        // Nothing moved — the bound is evaluated before any funds are touched.
+        assertEq(mockProtocol.balanceOf(address(vault)), 0, "no partial execution");
+        assertEq(usdc.balanceOf(address(vault)), 1000 * 1e6, "all assets still idle");
+    }
+
+    function test_Rebalance_SucceedsWhenMovementAtBound() public {
+        _depositToVault(alice, 1000 * 1e6);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).setMaxRebalanceDelta(8000); // exactly the move we make
+        _setSingleAllocation(MOCK_ID, 8000);
+
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance(); // 8000 == bound, allowed (strict >)
+
+        assertEq(mockProtocol.balanceOf(address(vault)), 800 * 1e6, "moved exactly to target");
+    }
+
+    function test_Rebalance_AllowsSmallIncrementalMoveUnderTightBound() public {
+        // Seed a 50% position with the bound off.
+        _depositToVault(alice, 1000 * 1e6);
+        _setSingleAllocation(MOCK_ID, 5000);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
+        assertEq(mockProtocol.balanceOf(address(vault)), 500 * 1e6, "seeded at 50%");
+
+        // Now arm a tight 10% churn bound and nudge 50% -> 55% (5% move).
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).setMaxRebalanceDelta(1000);
+        _setSingleAllocation(MOCK_ID, 5500);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance(); // 50 moved / 1000 = 500 bps < 1000
+
+        assertEq(mockProtocol.balanceOf(address(vault)), 550 * 1e6, "incremental nudge applied");
+    }
+
+    // -----------------------------------------------------------------------
     // helpers
     // -----------------------------------------------------------------------
 
@@ -317,7 +406,7 @@ contract AllocatorTest is Test {
     }
 
     function _allocatorSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](13);
+        s = new bytes4[](15);
         s[0] = AllocatorFacet.registerStrategy.selector;
         s[1] = AllocatorFacet.removeStrategy.selector;
         s[2] = AllocatorFacet.setAllocation.selector;
@@ -331,6 +420,8 @@ contract AllocatorTest is Test {
         s[10] = AllocatorFacet.idleReserveBps.selector;
         s[11] = AllocatorFacet.strategyTotalAssets.selector;
         s[12] = AllocatorFacet.idleAssets.selector;
+        s[13] = AllocatorFacet.setMaxRebalanceDelta.selector;
+        s[14] = AllocatorFacet.maxRebalanceDelta.selector;
     }
 
     function _mockSelectors() internal pure returns (bytes4[] memory s) {

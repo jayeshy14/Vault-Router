@@ -66,6 +66,11 @@ contract PendlePtStrategyFacet {
     /// @notice Thrown when a configured slippage tolerance exceeds 100%.
     error PendleInvalidSlippage(uint16 bps);
 
+    /// @notice Thrown when an AMM swap is attempted with no usable oracle mark
+    ///         (oracle unset or reporting a zero rate). Swapping unpriced would
+    ///         force minOut = 0 and leave the trade fully sandwichable.
+    error PendleOracleRequired();
+
     // -----------------------------------------------------------------------
     // Events
     // -----------------------------------------------------------------------
@@ -214,6 +219,7 @@ contract PendlePtStrategyFacet {
     ///      or if zero PT is received.
     /// @param amount Quantity of underlying asset to spend.
     function pendleDeposit(uint256 amount) external {
+        LibDiamond.enforceIsSelf();
         PendleStorage storage s = _ps();
         if (address(s.router) == address(0)) revert PendleNotConfigured();
         if (s.pt.isExpired()) revert PendleMarketExpired();
@@ -242,20 +248,16 @@ contract PendlePtStrategyFacet {
         // Empty limit order, strategy does not participate in the limit book.
         IPendleRouter.LimitOrderData memory limit;
 
-        // Derive an on-chain minimum from the oracle mark when available: invert
-        // the PT->asset rate to value `amount` in PT, then haircut by the
-        // slippage tolerance. The router reverts if it cannot meet minPtOut.
-        // Without an oracle there is no mark to bound against, so we fall back to
-        // 0 (unchanged behaviour for unpriced markets) and rely on the post-call
-        // zero check.
-        uint256 minPtOut;
-        if (address(s.oracle) != address(0)) {
-            uint256 rate = s.oracle.getPtToAssetRate(s.market, s.twapDuration);
-            if (rate > 0) {
-                uint256 expectedPt = amount * 1e18 / rate;
-                minPtOut = expectedPt * (PENDLE_BPS - _maxSlippageBps(s)) / PENDLE_BPS;
-            }
-        }
+        // Mandatory oracle: refuse to swap unpriced. The oracle mark is the only
+        // on-chain reference for bounding minPtOut; without it the trade would
+        // run with minPtOut = 0 and be fully sandwichable. Invert the PT->asset
+        // rate to value `amount` in PT, then haircut by the slippage tolerance.
+        // The router reverts if it cannot meet minPtOut.
+        if (address(s.oracle) == address(0)) revert PendleOracleRequired();
+        uint256 rate = s.oracle.getPtToAssetRate(s.market, s.twapDuration);
+        if (rate == 0) revert PendleOracleRequired();
+        uint256 expectedPt = amount * 1e18 / rate;
+        uint256 minPtOut = expectedPt * (PENDLE_BPS - _maxSlippageBps(s)) / PENDLE_BPS;
 
         (uint256 netPtOut,,) = s.router
             .swapExactTokenForPt(
@@ -280,6 +282,7 @@ contract PendlePtStrategyFacet {
     ///      the AMM discount; post-maturity it is 1:1.
     /// @param amount PT quantity to liquidate (denominated in underlying units).
     function pendleWithdraw(uint256 amount) external {
+        LibDiamond.enforceIsSelf();
         PendleStorage storage s = _ps();
         if (address(s.router) == address(0)) revert PendleNotConfigured();
 
@@ -307,18 +310,16 @@ contract PendlePtStrategyFacet {
             // redeemPyToToken burns PT (YT is implicitly 0 post-maturity).
             (received,) = s.router.redeemPyToToken(address(this), s.pt.YT(), amount, output);
         } else {
-            // Pre-maturity: sell PT on the Pendle AMM. Derive minTokenOut from the
-            // oracle mark when available (PT->asset rate, haircut by slippage) so
-            // the router itself enforces the bound; fall back to 0 only when no
-            // oracle is configured (unchanged behaviour for unpriced markets).
-            uint256 minTokenOut;
-            if (address(s.oracle) != address(0)) {
-                uint256 rate = s.oracle.getPtToAssetRate(s.market, s.twapDuration);
-                if (rate > 0) {
-                    uint256 expected = amount * rate / 1e18;
-                    minTokenOut = expected * (PENDLE_BPS - _maxSlippageBps(s)) / PENDLE_BPS;
-                }
-            }
+            // Pre-maturity: sell PT on the Pendle AMM. Mandatory oracle — derive
+            // minTokenOut from the mark (PT->asset rate, haircut by slippage) so
+            // the router enforces the bound. Refuse to sell unpriced rather than
+            // run with minTokenOut = 0 (fully sandwichable). Post-maturity redeem
+            // below needs no oracle: it is 1:1 with a hard 99% dust bound.
+            if (address(s.oracle) == address(0)) revert PendleOracleRequired();
+            uint256 rate = s.oracle.getPtToAssetRate(s.market, s.twapDuration);
+            if (rate == 0) revert PendleOracleRequired();
+            uint256 expected = amount * rate / 1e18;
+            uint256 minTokenOut = expected * (PENDLE_BPS - _maxSlippageBps(s)) / PENDLE_BPS;
 
             IPendleRouter.TokenOutput memory output = IPendleRouter.TokenOutput({
                 tokenOut: address(underlying),

@@ -16,6 +16,7 @@ import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
 import { PendlePtStrategyFacet } from "../../src/facets/strategies/PendlePtStrategyFacet.sol";
 import { IPendleRouter } from "../../src/interfaces/external/IPendleRouter.sol";
 import { IPPrincipalToken } from "../../src/interfaces/external/IPPrincipalToken.sol";
+import { IPYLpOracle } from "../../src/interfaces/external/IPYLpOracle.sol";
 import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 
 /// @title PendleStrategyForkTest
@@ -44,6 +45,12 @@ contract PendleStrategyForkTest is Test {
     address internal constant ARB_PENDLE_ROUTER = 0x888888888889758F76e7103c6CbF23ABbF58F946;
     address internal constant ARB_PENDLE_MARKET = address(0);
     address internal constant ARB_PENDLE_PT = address(0);
+    // Mandatory oracle for swaps: set to the live Pendle PtYtLpOracle on Arbitrum
+    // for the chosen market (TODO: confirm address + that the market's oracle is
+    // ready for ARB_PENDLE_TWAP via getOracleState). Left as address(0) so the
+    // test skips until wired — pendleDeposit/withdraw now revert without it.
+    address internal constant ARB_PENDLE_ORACLE = address(0);
+    uint32 internal constant ARB_PENDLE_TWAP = 900;
 
     bytes32 internal constant PENDLE_ID = bytes32("pendle");
 
@@ -57,8 +64,9 @@ contract PendleStrategyForkTest is Test {
             vm.skip(true);
             return;
         }
-        // Skip until a real, non-expired Arbitrum Pendle USDC market is wired in.
-        if (ARB_PENDLE_MARKET == address(0) || ARB_PENDLE_PT == address(0)) {
+        // Skip until a real, non-expired Arbitrum Pendle USDC market + oracle are
+        // wired in (the oracle is mandatory for the swap paths).
+        if (ARB_PENDLE_MARKET == address(0) || ARB_PENDLE_PT == address(0) || ARB_PENDLE_ORACLE == address(0)) {
             vm.skip(true);
             return;
         }
@@ -69,6 +77,7 @@ contract PendleStrategyForkTest is Test {
         vm.startPrank(owner);
         PendlePtStrategyFacet(address(vault))
             .pendleSetConfig(IPendleRouter(ARB_PENDLE_ROUTER), ARB_PENDLE_MARKET, IPPrincipalToken(ARB_PENDLE_PT));
+        PendlePtStrategyFacet(address(vault)).pendleSetOracle(IPYLpOracle(ARB_PENDLE_ORACLE), ARB_PENDLE_TWAP);
         AllocatorFacet(address(vault)).registerStrategy(PENDLE_ID, _pendleStrategyConfig());
         _setSingleAllocation(PENDLE_ID, 8000); // 80% to Pendle
         vm.stopPrank();
@@ -217,7 +226,7 @@ contract PendleStrategyForkTest is Test {
     }
 
     function _pendleSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](10);
+        s = new bytes4[](11);
         s[0] = PendlePtStrategyFacet.pendleSetConfig.selector;
         s[1] = PendlePtStrategyFacet.pendleTotalAssets.selector;
         s[2] = PendlePtStrategyFacet.pendleDeposit.selector;
@@ -228,5 +237,6 @@ contract PendleStrategyForkTest is Test {
         s[7] = PendlePtStrategyFacet.pendlePT.selector;
         s[8] = PendlePtStrategyFacet.pendleIsExpired.selector;
         s[9] = PendlePtStrategyFacet.pendleExpiry.selector;
+        s[10] = PendlePtStrategyFacet.pendleSetOracle.selector;
     }
 }

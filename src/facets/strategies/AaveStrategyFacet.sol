@@ -73,6 +73,7 @@ contract AaveStrategyFacet {
     /// @dev Called via diamond fallback by the AllocatorFacet during rebalance.
     ///      Verifies aToken balance increased by at least `amount` after supply.
     function aaveDeposit(uint256 amount) external {
+        LibDiamond.enforceIsSelf();
         AaveStorage storage s = _as();
         if (address(s.pool) == address(0)) revert AavePoolNotConfigured();
         IERC20 underlying = IERC20(IERC4626(address(this)).asset());
@@ -87,6 +88,7 @@ contract AaveStrategyFacet {
     /// @dev Checks the actual amount returned by pool.withdraw() — Aave can return
     ///      less than requested if liquidity is insufficient.
     function aaveWithdraw(uint256 amount) external {
+        LibDiamond.enforceIsSelf();
         AaveStorage storage s = _as();
         if (address(s.pool) == address(0)) revert AavePoolNotConfigured();
         IERC20 underlying = IERC20(IERC4626(address(this)).asset());

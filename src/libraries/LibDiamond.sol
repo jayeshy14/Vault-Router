@@ -26,6 +26,7 @@ library LibDiamond {
     }
 
     error NotContractOwner(address caller, address expected);
+    error NotSelf(address caller);
     error NoSelectorsProvided(address facetAddress);
     error CannotAddSelectorsToZeroAddress(bytes4[] selectors);
     error NoBytecodeAtAddress(address facetAddress, string message);
@@ -64,6 +65,20 @@ library LibDiamond {
         if (msg.sender != diamondStorage().contractOwner) {
             revert NotContractOwner(msg.sender, diamondStorage().contractOwner);
         }
+    }
+
+    /// @notice Restrict a function to internal diamond dispatch only — callable
+    ///         solely via `address(this).call(...)` from another facet (e.g. the
+    ///         allocator's rebalance or the harvester), never by an external
+    ///         caller. Used to gate strategy fund-movers so they cannot be
+    ///         invoked directly, which would bypass the curator gate, allocation
+    ///         caps, the per-rebalance churn bound, and the rebalance cooldown.
+    /// @dev Inside a facet running via the diamond's delegatecall, `address(this)`
+    ///      is the diamond; a legitimate self-dispatch arrives with
+    ///      `msg.sender == address(this)`, while any external (EOA/contract) call
+    ///      arrives with its own address preserved through the delegatecall.
+    function enforceIsSelf() internal view {
+        if (msg.sender != address(this)) revert NotSelf(msg.sender);
     }
 
     event DiamondCut(IDiamond.FacetCut[] _diamondCut, address _init, bytes _calldata);

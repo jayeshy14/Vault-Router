@@ -129,13 +129,17 @@ contract PendleStrategyTest is Test {
         assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 0, "zero before config");
     }
 
-    function test_Deposit_RevertsWhenUnconfigured() public {
-        vm.expectRevert(PendlePtStrategyFacet.PendleNotConfigured.selector);
+    function test_Deposit_RevertsForExternalCaller() public {
+        _configure();
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotSelf.selector, alice));
         PendlePtStrategyFacet(address(vault)).pendleDeposit(1e6);
     }
 
-    function test_Withdraw_RevertsWhenUnconfigured() public {
-        vm.expectRevert(PendlePtStrategyFacet.PendleNotConfigured.selector);
+    function test_Withdraw_RevertsForExternalCaller() public {
+        _configure();
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotSelf.selector, alice));
         PendlePtStrategyFacet(address(vault)).pendleWithdraw(1e6);
     }
 
@@ -153,12 +157,15 @@ contract PendleStrategyTest is Test {
     // Deposit (buy PT)
     // -----------------------------------------------------------------------
 
-    function test_Deposit_BuysPtAndReportsAssets() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount); // seed the diamond's idle balance
+    // The fund-movers are onlySelf, so deposits are driven through the
+    // allocator's rebalance (the legitimate dispatch path). A mandatory oracle
+    // is configured first — pendleDeposit refuses to swap unpriced.
 
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+    function test_Deposit_BuysPtAndReportsAssets() public {
+        _configureWithOracle(); // par oracle (1e18)
+        _register();
+        uint256 amount = 1000 * 1e6;
+        _deployAll(amount); // 100% target -> rebalance buys PT with all idle
 
         assertEq(usdc.balanceOf(address(vault)), 0, "idle underlying fully spent on PT");
         assertEq(pt.balanceOf(address(vault)), amount, "diamond holds PT at par");
@@ -168,56 +175,67 @@ contract PendleStrategyTest is Test {
     }
 
     function test_Deposit_AtDiscount_MintsMorePt() public {
-        _configure();
+        _configureWithOracle();
+        _register();
         router.setDepositRateBps(10_500); // buy PT at a 5% discount -> more PT per USDC
         uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _deployAll(amount);
 
         uint256 expectedPt = (amount * 10_500) / 10_000;
         assertEq(pt.balanceOf(address(vault)), expectedPt, "discount captured as extra PT");
-        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), expectedPt, "face value reported");
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), expectedPt, "marked at par == face");
     }
 
     function test_Deposit_RevertsWhenExpired() public {
-        _configure();
-        vm.warp(expiry); // at/after expiry the market is closed for buys
+        _configureWithOracle();
+        _register();
         usdc.mint(address(vault), 1000 * 1e6);
+        _setSingleAllocation(PENDLE_ID, 10_000);
+        vm.warp(expiry); // at/after expiry the market is closed for buys
+        vm.roll(block.number + 1);
 
+        vm.prank(owner);
         vm.expectRevert(PendlePtStrategyFacet.PendleMarketExpired.selector);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(1000 * 1e6);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
-    function test_Deposit_RevertsWhenZeroPtReceived() public {
-        _configure();
-        router.setDepositRateBps(0); // router mints no PT
+    function test_Deposit_RevertsWhenNoOracle() public {
+        // Mandatory oracle: a deposit on an unpriced market is refused outright
+        // rather than swapped with minOut = 0.
+        _configure(); // router/market/pt, but NO oracle
+        _register();
         usdc.mint(address(vault), 1000 * 1e6);
+        _setSingleAllocation(PENDLE_ID, 10_000);
+        vm.roll(block.number + 1);
 
-        vm.expectRevert(abi.encodeWithSelector(PendlePtStrategyFacet.PendleDepositFailed.selector, 0));
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(1000 * 1e6);
+        vm.prank(owner);
+        vm.expectRevert(PendlePtStrategyFacet.PendleOracleRequired.selector);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
     function test_Deposit_RevertsWhenFillBelowOracleSlippageBound() public {
         _configure();
         _setOracle(0.95e18); // oracle: 1 PT = 0.95 USDC -> a buy should yield ~1.053x PT
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
+        _register();
+        usdc.mint(address(vault), 1000 * 1e6);
+        _setSingleAllocation(PENDLE_ID, 10_000);
+        vm.roll(block.number + 1);
 
         // Router fills at par (1000 PT) — ~5% worse than the oracle-implied amount,
         // beyond the default 1% tolerance. The router enforces our derived minPtOut.
+        vm.prank(owner);
         vm.expectRevert("MockPendle: minPtOut");
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
     function test_Deposit_SucceedsWhenFillWithinOracleSlippageBound() public {
         _configure();
         _setOracle(0.95e18);
+        _register();
         router.setDepositRateBps(10_500); // 1050 PT, within 1% of the ~1052.6 oracle mark
         uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
+        _deployAll(amount);
 
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
         assertEq(pt.balanceOf(address(vault)), (amount * 10_500) / 10_000, "fill within tolerance accepted");
     }
 
@@ -249,12 +267,15 @@ contract PendleStrategyTest is Test {
     // -----------------------------------------------------------------------
 
     function test_Withdraw_PreMaturity_SellsPtForUnderlying() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _configureWithOracle();
+        _register();
+        _deployAll(1000 * 1e6); // 1000 PT, par oracle
 
-        PendlePtStrategyFacet(address(vault)).pendleWithdraw(400 * 1e6);
+        // Drop target to 60% -> rebalance sells 400 PT on the AMM.
+        _setSingleAllocation(PENDLE_ID, 6000);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
 
         assertEq(usdc.balanceOf(address(vault)), 400 * 1e6, "underlying back to idle");
         assertEq(pt.balanceOf(address(vault)), 600 * 1e6, "PT reduced by the sold amount");
@@ -262,63 +283,60 @@ contract PendleStrategyTest is Test {
     }
 
     function test_Withdraw_PostMaturity_RedeemsAtFaceValue() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _configureWithOracle();
+        _register();
+        _deployAll(1000 * 1e6);
 
-        vm.warp(expiry + 1); // PT now redeems 1:1 via redeemPyToToken
+        vm.warp(expiry + 1); // PT now redeems 1:1 via redeemPyToToken (no oracle needed)
         assertTrue(PendlePtStrategyFacet(address(vault)).pendleIsExpired(), "PT expired");
 
-        PendlePtStrategyFacet(address(vault)).pendleWithdraw(amount);
+        _setSingleAllocation(PENDLE_ID, 0);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
 
-        assertEq(usdc.balanceOf(address(vault)), amount, "full face value redeemed");
+        assertEq(usdc.balanceOf(address(vault)), 1000 * 1e6, "full face value redeemed");
         assertEq(pt.balanceOf(address(vault)), 0, "PT fully burned");
     }
 
-    function test_Withdraw_RevertsOnInsufficientPt() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+    function test_Withdraw_PreMaturity_RevertsWhenNoOracle() public {
+        // Mandatory oracle on the pre-maturity sell. Build a PT position directly
+        // (no oracle) so we can reach the sell path, then rebalance to 0%.
+        _configure(); // no oracle
+        _register();
+        pt.mint(address(vault), 1000 * 1e6);
+        _setSingleAllocation(PENDLE_ID, 0);
+        vm.roll(block.number + 1);
 
-        vm.expectRevert(abi.encodeWithSelector(PendlePtStrategyFacet.PendleInsufficientPt.selector, amount + 1, amount));
-        PendlePtStrategyFacet(address(vault)).pendleWithdraw(amount + 1);
-    }
-
-    function test_Withdraw_RevertsWhenZeroReceived() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
-
-        router.setWithdrawHaircutBps(10_000); // 100% haircut -> zero underlying out
-
-        vm.expectRevert(abi.encodeWithSelector(PendlePtStrategyFacet.PendleWithdrawFailed.selector, 400 * 1e6, 0));
-        PendlePtStrategyFacet(address(vault)).pendleWithdraw(400 * 1e6);
+        vm.prank(owner);
+        vm.expectRevert(PendlePtStrategyFacet.PendleOracleRequired.selector);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
     function test_Withdraw_RevertsWhenAmmHaircutExceedsSlippageBound() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
-        _setOracle(1e18); // par mark: minTokenOut derived as 99% of PT sold
+        _configureWithOracle(); // par mark: minTokenOut = 99% of PT sold
+        _register();
+        _deployAll(1000 * 1e6);
 
         router.setWithdrawHaircutBps(500); // 5% AMM haircut, beyond the 1% tolerance
+        _setSingleAllocation(PENDLE_ID, 6000); // sell 400
+        vm.roll(block.number + 1);
+        vm.prank(owner);
         vm.expectRevert("MockPendle: minTokenOut");
-        PendlePtStrategyFacet(address(vault)).pendleWithdraw(400 * 1e6);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
     function test_Withdraw_SucceedsWhenHaircutWithinSlippageBound() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
-        _setOracle(1e18);
+        _configureWithOracle();
+        _register();
+        _deployAll(1000 * 1e6);
 
         router.setWithdrawHaircutBps(50); // 0.5% haircut, within the 1% tolerance
-        PendlePtStrategyFacet(address(vault)).pendleWithdraw(400 * 1e6);
+        _setSingleAllocation(PENDLE_ID, 6000); // sell 400
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
+
         assertEq(usdc.balanceOf(address(vault)), (400 * 1e6 * 9950) / 10_000, "fill within tolerance settled");
     }
 
@@ -360,37 +378,33 @@ contract PendleStrategyTest is Test {
     // -----------------------------------------------------------------------
 
     function test_TotalAssets_MarksToMarketWhenOracleSet() public {
-        _configure();
+        _configureWithOracle(); // buy at par
+        _register();
         uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        // Acquire the position at par, then mark it down. The oracle drives
-        // totalAssets() valuation, not deposit execution, so it is set after the
-        // buy — a discounted mark against a par fill would otherwise (correctly)
-        // trip pendleDeposit's slippage guard.
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
-        _setOracle(0.95e18); // PT marked at a 5% discount pre-maturity
+        _deployAll(amount);
 
-        // Face value is 1000 USDC, but the oracle marks it down to 950.
+        oracle.setRate(0.95e18); // mark the live position down to a 5% discount
+
         assertEq(pt.balanceOf(address(vault)), amount, "holds PT at face");
         assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 950 * 1e6, "marked to market via oracle");
     }
 
     function test_TotalAssets_FaceValueWhenNoOracle() public {
-        _configure();
+        // The no-oracle valuation branch: hold PT (minted directly, since a
+        // deposit now requires an oracle) and confirm it reports face value.
+        _configure(); // no oracle
         uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        pt.mint(address(vault), amount);
 
-        // No oracle configured -> face value fallback.
         assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), amount, "face value without oracle");
     }
 
     function test_TotalAssets_PostMaturityIgnoresOracle() public {
-        _configure();
+        _configureWithOracle();
+        _register();
         uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
-        _setOracle(0.95e18); // set after the buy; see MarksToMarketWhenOracleSet
+        _deployAll(amount);
+        oracle.setRate(0.95e18); // discounted mark
 
         vm.warp(expiry + 1); // PT now redeems 1:1 — oracle discount must be bypassed
 
@@ -402,13 +416,12 @@ contract PendleStrategyTest is Test {
     // -----------------------------------------------------------------------
 
     function test_Harvest_IsNoOp() public {
-        _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        PendlePtStrategyFacet(address(vault)).pendleDeposit(amount);
+        _configureWithOracle();
+        _register();
+        _deployAll(1000 * 1e6);
 
         uint256 before = PendlePtStrategyFacet(address(vault)).pendleTotalAssets();
-        PendlePtStrategyFacet(address(vault)).pendleHarvest(); // must not revert
+        PendlePtStrategyFacet(address(vault)).pendleHarvest(); // pure no-op, stays callable
         assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), before, "harvest is a no-op");
     }
 
@@ -433,7 +446,7 @@ contract PendleStrategyTest is Test {
     // -----------------------------------------------------------------------
 
     function test_Rebalance_RoutesAssetsIntoPendle() public {
-        _configure();
+        _configureWithOracle();
         _register();
         _depositToVault(alice, 1000 * 1e6);
         _setSingleAllocation(PENDLE_ID, 8000); // 80% to Pendle
@@ -448,7 +461,7 @@ contract PendleStrategyTest is Test {
     }
 
     function test_Rebalance_PullsBackWhenAllocationDrops() public {
-        _configure();
+        _configureWithOracle();
         _register();
         _depositToVault(alice, 1000 * 1e6);
         _setSingleAllocation(PENDLE_ID, 8000);
@@ -486,6 +499,26 @@ contract PendleStrategyTest is Test {
     function _register() internal {
         vm.prank(owner);
         AllocatorFacet(address(vault)).registerStrategy(PENDLE_ID, _pendleStrategyConfig());
+    }
+
+    /// @dev Configure router/market/pt plus a par (1e18) oracle. The oracle is
+    ///      mandatory for deposits/pre-maturity sells now, so most position-
+    ///      building tests need it.
+    function _configureWithOracle() internal {
+        _configure();
+        _setOracle(1e18);
+    }
+
+    /// @dev Seed `amount` idle into the vault and rebalance it 100% into Pendle
+    ///      via the allocator's self-dispatch — the only path that can move funds
+    ///      now that the mutators are onlySelf. Caller configures (with oracle) +
+    ///      registers first.
+    function _deployAll(uint256 amount) internal {
+        usdc.mint(address(vault), amount);
+        _setSingleAllocation(PENDLE_ID, 10_000);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
     function _depositToVault(address from, uint256 amount) internal {

@@ -109,13 +109,21 @@ contract MorphoStrategyTest is Test {
         MorphoStrategyFacet(address(vault)).morphoTotalAssets();
     }
 
-    function test_Deposit_RevertsWhenUnconfigured() public {
-        vm.expectRevert(MorphoStrategyFacet.MorphoVaultNotConfigured.selector);
+    // -----------------------------------------------------------------------
+    // Access control — fund-movers are reachable only via diamond self-dispatch
+    // -----------------------------------------------------------------------
+
+    function test_Deposit_RevertsForExternalCaller() public {
+        _configure();
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotSelf.selector, alice));
         MorphoStrategyFacet(address(vault)).morphoDeposit(1e6);
     }
 
-    function test_Withdraw_RevertsWhenUnconfigured() public {
-        vm.expectRevert(MorphoStrategyFacet.MorphoVaultNotConfigured.selector);
+    function test_Withdraw_RevertsForExternalCaller() public {
+        _configure();
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotSelf.selector, alice));
         MorphoStrategyFacet(address(vault)).morphoWithdraw(1e6);
     }
 
@@ -125,15 +133,15 @@ contract MorphoStrategyTest is Test {
     }
 
     // -----------------------------------------------------------------------
-    // Strategy primitives — called directly on the diamond
+    // Strategy primitives — exercised through the allocator's self-dispatch
+    // (the fund-movers are onlySelf, so rebalance is the only legitimate caller)
     // -----------------------------------------------------------------------
 
     function test_Deposit_MintsSharesAndReportsAssets() public {
         _configure();
+        _register();
         uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount); // seed the diamond's idle balance
-
-        MorphoStrategyFacet(address(vault)).morphoDeposit(amount);
+        _deployAll(amount); // 100% target -> rebalance deposits everything
 
         assertEq(usdc.balanceOf(address(vault)), 0, "idle underlying fully deployed");
         assertGt(morphoVault.balanceOf(address(vault)), 0, "diamond holds Metamorpho shares");
@@ -144,27 +152,37 @@ contract MorphoStrategyTest is Test {
 
     function test_Deposit_RevertsOnSlippage() public {
         _configure();
+        _register();
         uint256 amount = 1000 * 1e6;
         morphoVault.setShortchangeBps(100); // mint 1% fewer shares than quoted
         usdc.mint(address(vault), amount);
+        _setSingleAllocation(MORPHO_ID, 10_000);
+        vm.roll(block.number + 1);
 
-        // `previewDeposit` is read on the empty vault — same value the facet sees.
+        // The whole rebalance deposit is `amount` (100% of NAV); previewDeposit
+        // on the empty vault is the value the facet sees, and MorphoSlippage
+        // bubbles up through the allocator's self-dispatch.
         uint256 expected = morphoVault.previewDeposit(amount);
         uint256 received = (expected * (10_000 - 100)) / 10_000;
 
+        vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(MorphoStrategyFacet.MorphoSlippage.selector, expected, received));
-        MorphoStrategyFacet(address(vault)).morphoDeposit(amount);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
     function test_Withdraw_ReturnsUnderlyingToDiamond() public {
         _configure();
+        _register();
         uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        MorphoStrategyFacet(address(vault)).morphoDeposit(amount);
+        _deployAll(amount); // all 1000 in Morpho
 
-        MorphoStrategyFacet(address(vault)).morphoWithdraw(400 * 1e6);
+        // Drop the target to 60% -> the next rebalance withdraws 400 back to idle.
+        _setSingleAllocation(MORPHO_ID, 6000);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
 
-        assertEq(usdc.balanceOf(address(vault)), 400 * 1e6, "withdrawn underlying back to idle");
+        assertApproxEqAbs(usdc.balanceOf(address(vault)), 400 * 1e6, 1, "withdrawn underlying back to idle");
         assertApproxEqAbs(
             MorphoStrategyFacet(address(vault)).morphoTotalAssets(), 600 * 1e6, 1, "remaining position reported"
         );
@@ -172,9 +190,8 @@ contract MorphoStrategyTest is Test {
 
     function test_TotalAssets_TracksYieldAccrual() public {
         _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        MorphoStrategyFacet(address(vault)).morphoDeposit(amount);
+        _register();
+        _deployAll(1000 * 1e6);
 
         uint256 beforeYield = MorphoStrategyFacet(address(vault)).morphoTotalAssets();
         morphoVault._testAccrueYield(100 * 1e6); // 10% supply yield donated to the vault
@@ -186,12 +203,12 @@ contract MorphoStrategyTest is Test {
 
     function test_Harvest_IsNoOp() public {
         _configure();
-        uint256 amount = 1000 * 1e6;
-        usdc.mint(address(vault), amount);
-        MorphoStrategyFacet(address(vault)).morphoDeposit(amount);
+        _register();
+        _deployAll(1000 * 1e6);
 
         uint256 before = MorphoStrategyFacet(address(vault)).morphoTotalAssets();
-        MorphoStrategyFacet(address(vault)).morphoHarvest(); // must not revert
+        // morphoHarvest moves no funds and stays callable (not onlySelf); no-op.
+        MorphoStrategyFacet(address(vault)).morphoHarvest();
         assertEq(MorphoStrategyFacet(address(vault)).morphoTotalAssets(), before, "harvest is a no-op");
     }
 
@@ -292,6 +309,17 @@ contract MorphoStrategyTest is Test {
     function _register() internal {
         vm.prank(owner);
         AllocatorFacet(address(vault)).registerStrategy(MORPHO_ID, _morphoStrategyConfig());
+    }
+
+    /// @dev Seed `amount` idle into the vault and rebalance it 100% into Morpho
+    ///      via the allocator's self-dispatch — the only path that can move funds
+    ///      now that the mutators are onlySelf. Caller configures + registers first.
+    function _deployAll(uint256 amount) internal {
+        usdc.mint(address(vault), amount);
+        _setSingleAllocation(MORPHO_ID, 10_000);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
     }
 
     function _depositToVault(address from, uint256 amount) internal {

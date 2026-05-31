@@ -12,6 +12,7 @@ import { Diamond } from "./Diamond.sol";
 import { LibAllocator } from "./libraries/LibAllocator.sol";
 import { LibFees } from "./libraries/LibFees.sol";
 import { LibGuard } from "./libraries/LibGuard.sol";
+import { LibLock } from "./libraries/LibLock.sol";
 
 /// @title Vault Router is a modular ERC-4626 vault on the EIP-2535 Diamond pattern.
 /// @notice Vault owns the ERC-4626 surface (deposit/withdraw/totalAssets) plus the
@@ -84,6 +85,13 @@ contract Vault is Diamond, ERC4626, ReentrancyGuard {
         // Post-accrue handles the first-deposit bootstrap: now that supply > 0,
         // initialise HWM and the accrual timestamp. No-op for subsequent deposits.
         _accrueFees();
+        // Lock the freshly minted shares for the configured window so an attacker
+        // cannot deposit, manipulate, and withdraw within the same block. Skipped
+        // when the period is 0 (disabled). Re-deposits refresh the window.
+        LibLock.LockStorage storage l = LibLock.lockStorage();
+        if (l.shareLockPeriod > 0) {
+            l.lockedUntil[receiver] = block.timestamp + uint256(l.shareLockPeriod);
+        }
     }
 
     function _withdraw(
@@ -101,6 +109,20 @@ contract Vault is Diamond, ERC4626, ReentrancyGuard {
         _accrueFees();
         super._withdraw(caller, receiver, owner, assets, shares);
         _accrueFees();
+    }
+
+    /// @dev Single enforcement point for the share lock. Runs on every ERC20
+    ///      mutation: mints (`from == 0`) are exempt — that is how the lock is
+    ///      armed in `_deposit` — while transfers AND burns of still-locked
+    ///      shares revert. Catching burns here covers withdraw/redeem, and
+    ///      catching transfers stops the transfer-then-withdraw bypass, so no
+    ///      separate check is needed in `_withdraw`.
+    function _update(address from, address to, uint256 value) internal override {
+        if (from != address(0)) {
+            uint256 unlockAt = LibLock.lockStorage().lockedUntil[from];
+            if (block.timestamp < unlockAt) revert LibLock.SharesLocked(from, unlockAt);
+        }
+        super._update(from, to, value);
     }
 
     /// @dev NAV circuit-breaker tripwire run on every deposit/withdraw. Reverts
