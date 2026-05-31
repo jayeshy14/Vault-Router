@@ -97,6 +97,7 @@ contract MorphoStrategyFacet {
     ///      `previewDeposit(amount)` predicted.
     /// @param amount Quantity of underlying asset to allocate to Morpho.
     function morphoDeposit(uint256 amount) external {
+        LibDiamond.enforceIsSelf();
         MorphoStorage storage s = _ms();
         if (address(s.vault) == address(0)) revert MorphoVaultNotConfigured();
         IERC20 underlying = IERC20(IERC4626(address(this)).asset());
@@ -112,6 +113,7 @@ contract MorphoStrategyFacet {
     ///      of the user-facing redeem path that also burns shares.
     /// @param amount Quantity of underlying asset to pull out of Morpho.
     function morphoWithdraw(uint256 amount) external {
+        LibDiamond.enforceIsSelf();
         MorphoStorage storage s = _ms();
         if (address(s.vault) == address(0)) revert MorphoVaultNotConfigured();
         // Bound the shares burned: burning more than previewWithdraw predicted
