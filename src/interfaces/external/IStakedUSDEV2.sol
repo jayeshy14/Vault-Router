@@ -3,7 +3,7 @@
 pragma solidity ^0.8.24;
 
 interface IStakedUSDEV2 {
-    function asset() external view returns (address);            // == USDe
+    function asset() external view returns (address); // == USDe
     function deposit(uint256 assets, address receiver) external returns (uint256 shares);
     function convertToAssets(uint256 shares) external view returns (uint256 assets);
     function balanceOf(address account) external view returns (uint256);
@@ -18,5 +18,4 @@ interface IStakedUSDEV2 {
     function cooldownAssets(uint256 assets) external returns (uint256 shares);
     function unstake(address receiver) external;
     function cooldowns(address account) external view returns (uint104 cooldownEnd, uint152 underlyingAmount);
-
 }

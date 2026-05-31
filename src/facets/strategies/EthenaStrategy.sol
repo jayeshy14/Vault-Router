@@ -19,27 +19,22 @@ contract EthenaStrategyFacet {
     error EthenaCoinNotInPool(address tokenIn, address tokenOut);
     error EthenaZeroAddress();
 
-
     /*====events====*/
 
-    event EthenaSetConfig( address indexed usde, address indexed curvePool, address indexed stakedUSDEV2);
+    event EthenaSetConfig(address indexed usde, address indexed curvePool, address indexed stakedUSDEV2);
 
     // erc7201:vaultrouter.strategy.ethena
-    bytes32 internal constant ETHENA_STORAGE_SLOT =
-        //0x79d5a97e8f8d9829cf9573ba239138882c2da3a5eaaa986a771c2ca1596b9500;
-    
+    bytes32 internal constant ETHENA_STORAGE_SLOT = 0x0000000000000000000000000000000000000000000000000000000000000000;
+
     struct EthenaStorage {
         IERC20 usde;
         ICurvePool curvePool;
         IStakedUSDEV2 stakedUSDEV2;
         uint256 maxSlippageBps;
         uint256 cooldownDuration;
-
-        /*====only for offchain explicit routing ====*/ 
-
+        /*====only for offchain explicit routing ====*/
         //mapping (address => bool) allowedRouter;
         //mapping (address => bool) allowedSpender;
-
     }
 
     function _es() internal pure returns (EthenaStorage storage s) {
@@ -58,10 +53,7 @@ contract EthenaStrategyFacet {
         external
     {
         LibDiamond.enforceIsContractOwner();
-        if (
-            address(usde) == address(0) || address(curvePool) == address(0)
-                || address(stakedUSDEV2) == address(0)
-        ) {
+        if (address(usde) == address(0) || address(curvePool) == address(0) || address(stakedUSDEV2) == address(0)) {
             revert EthenaUSDENotConfigured();
         }
         EthenaStorage storage s = _es();
@@ -80,8 +72,7 @@ contract EthenaStrategyFacet {
     function ethenaDeposit(uint256 amount) external {
         EthenaStorage storage s = _es();
         if (
-            address(s.usde) == address(0) || address(s.curvePool) == address(0)
-                || address(s.stakedUSDEV2) == address(0)
+            address(s.usde) == address(0) || address(s.curvePool) == address(0) || address(s.stakedUSDEV2) == address(0)
         ) {
             revert EthenaUSDENotConfigured();
         }
@@ -110,17 +101,14 @@ contract EthenaStrategyFacet {
         return s.stakedUSDEV2.convertToAssets(shares) / 1e12; // USDe(18) -> USDC(6)
     }
 
-    function ethenaWithdraw () external {
-        
+    function ethenaWithdraw() external {
+
         //withdraw is gated on the core protocol side
         //going asynchronous has lots of variables included and is practically complex
 
-    }
+        }
 
     /*=== cooldown ===*/
-
-
-
 
     /*==== internal swap helper — Curve only, par-floor enforced by caller ====*/
 
@@ -184,6 +172,4 @@ contract EthenaStrategyFacet {
         }
         if (!foundIn || !foundOut) revert EthenaCoinNotInPool(tokenIn, tokenOut);
     }
-
-
 }
