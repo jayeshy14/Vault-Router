@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { ERC4626 } from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
@@ -13,6 +14,8 @@ import { LibAllocator } from "./libraries/LibAllocator.sol";
 import { LibFees } from "./libraries/LibFees.sol";
 import { LibGuard } from "./libraries/LibGuard.sol";
 import { LibLock } from "./libraries/LibLock.sol";
+import { LibRoles } from "./libraries/LibRoles.sol";
+import { LibWithdrawQueue } from "./libraries/LibWithdrawQueue.sol";
 
 /// @title Vault Router is a modular ERC-4626 vault on the EIP-2535 Diamond pattern.
 /// @notice Vault owns the ERC-4626 surface (deposit/withdraw/totalAssets) plus the
@@ -23,7 +26,19 @@ import { LibLock } from "./libraries/LibLock.sol";
 ///      virtual shares. The ERC-4626 surface is native (non-facet) and therefore
 ///      non-upgradeable, so it cannot be altered by a later diamondCut.
 contract Vault is Diamond, ERC4626, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     error StrategyTotalAssetsCallFailed(bytes32 strategyId);
+
+    error WithdrawQueueZeroShares();
+    error WithdrawToZeroAddress();
+    error WithdrawRequestNotFound(uint256 id);
+    error NotRequestOwner(uint256 id, address caller);
+    error InsufficientIdleLiquidity(uint256 needed, uint256 available);
+
+    event WithdrawRequested(uint256 indexed id, address indexed owner, address indexed receiver, uint256 shares);
+    event WithdrawCancelled(uint256 indexed id, address indexed owner, uint256 shares);
+    event WithdrawFulfilled(uint256 indexed id, address indexed receiver, uint256 shares, uint256 assets);
 
     constructor(
         IERC20 asset_,
@@ -185,5 +200,87 @@ contract Vault is Diamond, ERC4626, ReentrancyGuard {
 
         f.lastFeeAccrual = nowTs;
         if (feeShares > 0) _mint(f.feeRecipient, feeShares);
+    }
+
+    // -----------------------------------------------------------------------
+    // Async withdrawal queue
+    // -----------------------------------------------------------------------
+    // Synchronous `withdraw`/`redeem` pay from idle balance and revert when the
+    // vault is short — which happens when capital sits in an illiquid strategy
+    // (notably Pendle PT before maturity). The queue gives those exits a path:
+    // the requester escrows shares, a curator frees liquidity via `rebalance`,
+    // then fulfils the claim at the live share price. These live on the native
+    // surface because only it can `_transfer`/`_burn` shares; the readers are on
+    // `WithdrawQueueFacet`.
+
+    /// @notice Escrow `shares` for a later asynchronous exit to `receiver`.
+    /// @dev The shares are transferred to the vault (not burned), so the request
+    ///      stays NAV-neutral and the requester keeps full exposure until
+    ///      fulfillment — the claim is priced at fulfil time, not now. Subject to
+    ///      the share lock: locked shares cannot be queued.
+    /// @param shares   Amount of vault shares to escrow.
+    /// @param receiver Address that will receive the underlying on fulfillment.
+    /// @return id      The request id, used to fulfil or cancel.
+    function requestWithdraw(uint256 shares, address receiver) external nonReentrant returns (uint256 id) {
+        if (shares == 0) revert WithdrawQueueZeroShares();
+        if (receiver == address(0)) revert WithdrawToZeroAddress();
+
+        // Escrow the shares (reverts on insufficient balance or active lock).
+        _transfer(msg.sender, address(this), shares);
+
+        LibWithdrawQueue.QueueStorage storage q = LibWithdrawQueue.queueStorage();
+        id = q.nextRequestId++;
+        q.requests[id] = LibWithdrawQueue.WithdrawRequest({ owner: msg.sender, receiver: receiver, shares: shares });
+        q.totalPendingShares += shares;
+
+        emit WithdrawRequested(id, msg.sender, receiver, shares);
+    }
+
+    /// @notice Cancel a pending request and return the escrowed shares to their owner.
+    /// @dev Only the request's owner may cancel, and only while it is unfulfilled.
+    /// @param id The request id returned by `requestWithdraw`.
+    function cancelWithdraw(uint256 id) external nonReentrant {
+        LibWithdrawQueue.QueueStorage storage q = LibWithdrawQueue.queueStorage();
+        LibWithdrawQueue.WithdrawRequest memory req = q.requests[id];
+        if (req.shares == 0) revert WithdrawRequestNotFound(id);
+        if (req.owner != msg.sender) revert NotRequestOwner(id, msg.sender);
+
+        q.totalPendingShares -= req.shares;
+        delete q.requests[id];
+
+        _transfer(address(this), req.owner, req.shares);
+
+        emit WithdrawCancelled(id, req.owner, req.shares);
+    }
+
+    /// @notice Fulfil a pending request: burn the escrowed shares and pay the
+    ///         underlying to the recorded receiver.
+    /// @dev Curator-gated (the keeper seat). Honors the circuit breaker and
+    ///      accrues fees first, so the payout reflects the live, post-fee share
+    ///      price. Reverts if idle liquidity is insufficient — the curator must
+    ///      `rebalance` enough out of strategies first. Effects precede the
+    ///      transfer (CEI) and the function is `nonReentrant`.
+    /// @param id The request id to fulfil.
+    function fulfillWithdraw(uint256 id) external nonReentrant {
+        LibRoles.enforceIsCurator();
+
+        LibWithdrawQueue.QueueStorage storage q = LibWithdrawQueue.queueStorage();
+        LibWithdrawQueue.WithdrawRequest memory req = q.requests[id];
+        if (req.shares == 0) revert WithdrawRequestNotFound(id);
+
+        _guard();
+        _accrueFees();
+
+        uint256 assets = convertToAssets(req.shares);
+        uint256 idle = IERC20(asset()).balanceOf(address(this));
+        if (idle < assets) revert InsufficientIdleLiquidity(assets, idle);
+
+        q.totalPendingShares -= req.shares;
+        delete q.requests[id];
+
+        _burn(address(this), req.shares);
+        IERC20(asset()).safeTransfer(req.receiver, assets);
+
+        emit WithdrawFulfilled(id, req.receiver, req.shares, assets);
     }
 }
