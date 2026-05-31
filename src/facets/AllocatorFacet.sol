@@ -29,6 +29,8 @@ contract AllocatorFacet {
     error StrategyAlreadyQuarantined(bytes32 strategyId);
     error StrategyNotQuarantined(bytes32 strategyId);
     error AllocationToQuarantined(bytes32 strategyId);
+    error RebalanceDeltaTooLarge(uint256 movementBps, uint16 maxBps);
+    error IdleReserveBreached(uint256 idleAfter, uint256 requiredIdle);
 
     event StrategyRegistered(bytes32 indexed strategyId, LibAllocator.StrategyConfig config);
     event StrategyRemoved(bytes32 indexed strategyId);
@@ -39,6 +41,7 @@ contract AllocatorFacet {
     event Rebalanced(uint256 totalAssets, uint256 idleAfter);
     event StrategyQuarantined(bytes32 indexed strategyId);
     event StrategyReleased(bytes32 indexed strategyId);
+    event MaxRebalanceDeltaSet(uint16 bps);
 
     // -----------------------------------------------------------------------
     // Owner-gated governance / risk bounds
@@ -143,6 +146,22 @@ contract AllocatorFacet {
         emit GlobalStrategyCapSet(capBps);
     }
 
+    /// @notice Cap the total churn a single `rebalance` may move — the sum of
+    ///         |delta| across all strategies — as bps of NAV. This bounds *how
+    ///         much* a rebalance can relocate, complementing the role gate
+    ///         (*who*) and the one-per-block throttle (*how often*).
+    /// @dev Owner-gated risk bound. `0` disables the check. Because a full
+    ///      reshuffle moves each relocated dollar twice (out of one strategy and
+    ///      into another), movement can reach 2x NAV (20_000 bps); the setter
+    ///      therefore admits values up to 2 * BPS_DENOMINATOR.
+    /// @param bps Max movement in basis points of NAV (0 = disabled).
+    function setMaxRebalanceDelta(uint16 bps) external {
+        LibDiamond.enforceIsContractOwner();
+        if (bps > 2 * LibAllocator.BPS_DENOMINATOR) revert InvalidBps(bps);
+        LibAllocator.allocatorStorage().maxRebalanceDeltaBps = bps;
+        emit MaxRebalanceDeltaSet(bps);
+    }
+
     /// @notice Isolate a strategy whose accounting can no longer be trusted (a
     ///         failing, exploited, or stuck protocol). A quarantined strategy is
     ///         excluded from `totalAssets` and skipped by the rebalancer and
@@ -205,6 +224,28 @@ contract AllocatorFacet {
             totalCached += cur;
         }
 
+        // Per-call churn bound: sum |delta| across strategies and reject the
+        // rebalance if it exceeds maxRebalanceDeltaBps of NAV. Evaluated before
+        // any funds move, so an over-large reshuffle never partially executes.
+        // 0 disables the bound.
+        uint16 maxDelta = s.maxRebalanceDeltaBps;
+        if (maxDelta != 0) {
+            uint256 totalMovement;
+            for (uint256 i; i < n; i++) {
+                bytes32 id = s.strategyIds[i];
+                if (s.quarantined[id]) continue;
+                uint256 target = (totalCached * uint256(s.targetBps[id])) / LibAllocator.BPS_DENOMINATOR;
+                uint256 cur = currentAssets[i];
+                totalMovement += cur > target ? cur - target : target - cur;
+            }
+            // Cross-multiply to avoid division and the totalCached == 0 case.
+            if (totalMovement * LibAllocator.BPS_DENOMINATOR > totalCached * uint256(maxDelta)) {
+                uint256 movementBps =
+                    totalCached == 0 ? 0 : (totalMovement * LibAllocator.BPS_DENOMINATOR) / totalCached;
+                revert RebalanceDeltaTooLarge(movementBps, maxDelta);
+            }
+        }
+
         // Pass 1: withdraw from over-target strategies.
         for (uint256 i; i < n; i++) {
             bytes32 id = s.strategyIds[i];
@@ -227,7 +268,16 @@ contract AllocatorFacet {
             }
         }
 
-        emit Rebalanced(totalCached, _idleAssetsInternal());
+        // Defense-in-depth: the idle reserve floor follows from
+        // `total + idleReserveBps <= 10_000` in setAllocation, but assert it on
+        // realized balances too so any accounting/slippage drift that would dip
+        // idle below the floor reverts the whole rebalance rather than silently
+        // under-reserving.
+        uint256 idleAfter = _idleAssetsInternal();
+        uint256 requiredIdle = (totalCached * uint256(s.idleReserveBps)) / LibAllocator.BPS_DENOMINATOR;
+        if (idleAfter < requiredIdle) revert IdleReserveBreached(idleAfter, requiredIdle);
+
+        emit Rebalanced(totalCached, idleAfter);
     }
 
     // -----------------------------------------------------------------------
@@ -275,6 +325,10 @@ contract AllocatorFacet {
 
     function lastRebalanceBlock() external view returns (uint64) {
         return LibAllocator.allocatorStorage().lastRebalanceBlock;
+    }
+
+    function maxRebalanceDelta() external view returns (uint16) {
+        return LibAllocator.allocatorStorage().maxRebalanceDeltaBps;
     }
 
     function isQuarantined(bytes32 strategyId) external view returns (bool) {

@@ -34,6 +34,11 @@ library LibAllocator {
         uint16 idleReserveBps;
         uint16 globalMaxStrategyCapBps;
         uint64 lastRebalanceBlock;
+        /// @dev Per-call rebalance churn bound: caps the sum of |delta| moved
+        ///      across all strategies in a single rebalance, as bps of NAV. So
+        ///      even a compromised curator/AI key can only relocate a bounded,
+        ///      throttled fraction of the vault per block. 0 disables the bound.
+        uint16 maxRebalanceDeltaBps;
         /// @dev Strategies flagged here are isolated: excluded from NAV and
         ///      skipped by the rebalancer/harvester, so a single failing protocol
         ///      cannot brick the whole vault. Owner-controlled risk state, kept
