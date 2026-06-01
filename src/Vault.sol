@@ -100,11 +100,17 @@ contract Vault is Diamond, ERC4626, ReentrancyGuard {
         // Post-accrue handles the first-deposit bootstrap: now that supply > 0,
         // initialise HWM and the accrual timestamp. No-op for subsequent deposits.
         _accrueFees();
-        // Lock the freshly minted shares for the configured window so an attacker
+        // Lock the receiver's shares for the configured window so an attacker
         // cannot deposit, manipulate, and withdraw within the same block. Skipped
         // when the period is 0 (disabled). Re-deposits refresh the window.
+        //
+        // Armed ONLY when the depositor is locking their own shares
+        // (caller == receiver). A third party must never be able to set the lock
+        // on an arbitrary receiver: doing so would let an attacker freeze a
+        // victim's entire balance, or — with receiver == address(this) — lock the
+        // vault's own escrowed withdraw-queue shares and brick cancel/fulfill.
         LibLock.LockStorage storage l = LibLock.lockStorage();
-        if (l.shareLockPeriod > 0) {
+        if (l.shareLockPeriod > 0 && caller == receiver) {
             l.lockedUntil[receiver] = block.timestamp + uint256(l.shareLockPeriod);
         }
     }
@@ -133,7 +139,11 @@ contract Vault is Diamond, ERC4626, ReentrancyGuard {
     ///      catching transfers stops the transfer-then-withdraw bypass, so no
     ///      separate check is needed in `_withdraw`.
     function _update(address from, address to, uint256 value) internal override {
-        if (from != address(0)) {
+        // Mints (from == 0) are exempt — that is how the lock is armed. The
+        // vault's own address is also exempt: shares it custodies are protocol
+        // escrow (the withdraw queue), not user funds subject to the anti-MEV
+        // lock, and blocking their movement would brick cancel/fulfill.
+        if (from != address(0) && from != address(this)) {
             uint256 unlockAt = LibLock.lockStorage().lockedUntil[from];
             if (block.timestamp < unlockAt) revert LibLock.SharesLocked(from, unlockAt);
         }

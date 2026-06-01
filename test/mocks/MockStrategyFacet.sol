@@ -18,6 +18,7 @@ contract MockStrategyFacet {
         MockProtocol protocol;
         uint256 harvestCount;
         bool reverting;
+        bool revertOnMove;
     }
 
     function _ms() internal pure returns (MockStorage storage s) {
@@ -41,6 +42,14 @@ contract MockStrategyFacet {
         _ms().reverting = v;
     }
 
+    /// @notice Test-only — when set, the strategy's deposit and withdraw movers
+    ///         revert while its totalAssets read still succeeds, simulating a
+    ///         strategy that prices fine but cannot move funds (e.g. a paused
+    ///         lending pool). Used to exercise rebalance's per-strategy skip.
+    function mockSetRevertOnMove(bool v) external {
+        _ms().revertOnMove = v;
+    }
+
     function mockTotalAssets() external view returns (uint256) {
         if (_ms().reverting) revert("mock: totalAssets reverted");
         MockProtocol p = _ms().protocol;
@@ -49,6 +58,7 @@ contract MockStrategyFacet {
     }
 
     function mockDeposit(uint256 amount) external {
+        if (_ms().revertOnMove) revert("mock: deposit reverted");
         MockProtocol p = _ms().protocol;
         IERC20 token = IERC20(IERC4626(address(this)).asset());
         token.approve(address(p), amount);
@@ -56,6 +66,7 @@ contract MockStrategyFacet {
     }
 
     function mockWithdraw(uint256 amount) external {
+        if (_ms().revertOnMove) revert("mock: withdraw reverted");
         _ms().protocol.withdraw(amount);
     }
 

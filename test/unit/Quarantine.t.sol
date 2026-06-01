@@ -136,6 +136,59 @@ contract QuarantineTest is Test {
     }
 
     // -----------------------------------------------------------------------
+    // F06: permissionless recovery from a strategy whose NAV read reverts
+    // -----------------------------------------------------------------------
+
+    function test_QuarantineFailedStrategy_PermissionlesslyUnbricks() public {
+        MockStrategyFacet(address(vault)).mockSetReverting(true); // NAV read now reverts
+
+        // The vault is bricked: totalAssets (and thus every ERC-4626 entrypoint) reverts.
+        vm.expectRevert(abi.encodeWithSelector(Vault.StrategyTotalAssetsCallFailed.selector, MOCK_ID));
+        vault.totalAssets();
+
+        // ANY caller — no role required — can isolate a strategy whose read is
+        // actually failing, so recovery no longer waits on the owner.
+        address keeper = makeAddr("keeper");
+        vm.prank(keeper);
+        AllocatorFacet(address(vault)).quarantineFailedStrategy(MOCK_ID);
+
+        assertTrue(AllocatorFacet(address(vault)).isQuarantined(MOCK_ID), "permissionlessly quarantined");
+        assertEq(vault.totalAssets(), 500 * 1e6, "vault live again; failing strategy excluded from NAV");
+    }
+
+    function test_QuarantineFailedStrategy_RevertsOnHealthyStrategy() public {
+        // A healthy strategy cannot be griefed offline: the on-chain liveness
+        // probe only permits quarantine when the NAV read genuinely reverts.
+        address keeper = makeAddr("keeper");
+        vm.prank(keeper);
+        vm.expectRevert(abi.encodeWithSelector(AllocatorFacet.StrategyHealthy.selector, MOCK_ID));
+        AllocatorFacet(address(vault)).quarantineFailedStrategy(MOCK_ID);
+    }
+
+    // -----------------------------------------------------------------------
+    // F05: a strategy that prices fine but cannot move funds is skipped, not
+    // allowed to brick the whole rebalance.
+    // -----------------------------------------------------------------------
+
+    function test_Rebalance_SkipsStrategyThatRevertsOnMove() public {
+        // Reads succeed (NAV still 500), but deposits/withdrawals revert — e.g. a
+        // paused lending pool. Quarantine's read-probe wouldn't catch this, so the
+        // rebalancer itself must tolerate the failed move.
+        MockStrategyFacet(address(vault)).mockSetRevertOnMove(true);
+
+        _setSingleAllocation(MOCK_ID, 8000); // wants to deposit 300 more into the mock
+        vm.roll(block.number + 1);
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit AllocatorFacet.StrategyRebalanceSkipped(MOCK_ID, MockStrategyFacet.mockDeposit.selector);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance(); // must NOT revert
+
+        assertEq(AllocatorFacet(address(vault)).strategyTotalAssets(MOCK_ID), 500 * 1e6, "mock position unchanged");
+        assertEq(usdc.balanceOf(address(vault)), 500 * 1e6, "idle unchanged; failed move skipped");
+    }
+
+    // -----------------------------------------------------------------------
     // harvestAll isolation
     // -----------------------------------------------------------------------
 
@@ -336,7 +389,7 @@ contract QuarantineTest is Test {
     }
 
     function _allocatorSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](16);
+        s = new bytes4[](17);
         s[0] = AllocatorFacet.registerStrategy.selector;
         s[1] = AllocatorFacet.removeStrategy.selector;
         s[2] = AllocatorFacet.setAllocation.selector;
@@ -353,6 +406,7 @@ contract QuarantineTest is Test {
         s[13] = AllocatorFacet.quarantineStrategy.selector;
         s[14] = AllocatorFacet.releaseStrategy.selector;
         s[15] = AllocatorFacet.isQuarantined.selector;
+        s[16] = AllocatorFacet.quarantineFailedStrategy.selector;
     }
 
     function _harvestSelectors() internal pure returns (bytes4[] memory s) {
@@ -362,7 +416,7 @@ contract QuarantineTest is Test {
     }
 
     function _mockSelectors() internal pure returns (bytes4[] memory s) {
-        s = new bytes4[](7);
+        s = new bytes4[](8);
         s[0] = MockStrategyFacet.mockSetProtocol.selector;
         s[1] = MockStrategyFacet.mockProtocol.selector;
         s[2] = MockStrategyFacet.mockTotalAssets.selector;
@@ -370,5 +424,6 @@ contract QuarantineTest is Test {
         s[4] = MockStrategyFacet.mockWithdraw.selector;
         s[5] = MockStrategyFacet.mockHarvest.selector;
         s[6] = MockStrategyFacet.mockSetReverting.selector;
+        s[7] = MockStrategyFacet.mockSetRevertOnMove.selector;
     }
 }

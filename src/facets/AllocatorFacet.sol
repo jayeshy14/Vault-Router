@@ -31,6 +31,7 @@ contract AllocatorFacet {
     error AllocationToQuarantined(bytes32 strategyId);
     error RebalanceDeltaTooLarge(uint256 movementBps, uint16 maxBps);
     error IdleReserveBreached(uint256 idleAfter, uint256 requiredIdle);
+    error StrategyHealthy(bytes32 strategyId);
 
     event StrategyRegistered(bytes32 indexed strategyId, LibAllocator.StrategyConfig config);
     event StrategyRemoved(bytes32 indexed strategyId);
@@ -42,6 +43,7 @@ contract AllocatorFacet {
     event StrategyQuarantined(bytes32 indexed strategyId);
     event StrategyReleased(bytes32 indexed strategyId);
     event MaxRebalanceDeltaSet(uint16 bps);
+    event StrategyRebalanceSkipped(bytes32 indexed strategyId, bytes4 selector);
 
     // -----------------------------------------------------------------------
     // Owner-gated governance / risk bounds
@@ -194,6 +196,29 @@ contract AllocatorFacet {
         emit StrategyReleased(strategyId);
     }
 
+    /// @notice Permissionlessly quarantine a strategy whose NAV read is currently
+    ///         reverting, so a single broken strategy can no longer brick
+    ///         `totalAssets` and every ERC-4626 entrypoint while waiting on the
+    ///         owner to react.
+    /// @dev Guarded by an on-chain liveness probe: it staticcalls the strategy's
+    ///      own `totalAssetsSelector` and only quarantines if that call REVERTS.
+    ///      A healthy strategy therefore cannot be griefed offline by anyone. The
+    ///      effect mirrors `quarantineStrategy` (excluded from NAV, target zeroed);
+    ///      lifting it stays owner-gated via `releaseStrategy`, since re-including
+    ///      a position is a trust decision.
+    function quarantineFailedStrategy(bytes32 strategyId) external {
+        LibAllocator.AllocatorStorage storage s = LibAllocator.allocatorStorage();
+        if (!s.configs[strategyId].active) revert StrategyNotRegistered(strategyId);
+        if (s.quarantined[strategyId]) revert StrategyAlreadyQuarantined(strategyId);
+
+        (bool ok,) = address(this).staticcall(abi.encodeWithSelector(s.configs[strategyId].totalAssetsSelector));
+        if (ok) revert StrategyHealthy(strategyId);
+
+        s.quarantined[strategyId] = true;
+        s.targetBps[strategyId] = 0;
+        emit StrategyQuarantined(strategyId);
+    }
+
     // -----------------------------------------------------------------------
     // Rebalance
     // -----------------------------------------------------------------------
@@ -253,7 +278,11 @@ contract AllocatorFacet {
             uint256 target = (totalCached * uint256(s.targetBps[id])) / LibAllocator.BPS_DENOMINATOR;
             if (currentAssets[i] > target) {
                 uint256 delta = currentAssets[i] - target;
-                _dispatchStrategyCall(id, s.configs[id].withdrawSelector, delta);
+                // Skip (don't brick the batch) if this one strategy's withdraw
+                // reverts; the idle-reserve floor below still backstops safety.
+                if (!_dispatchStrategyCall(s.configs[id].withdrawSelector, delta)) {
+                    emit StrategyRebalanceSkipped(id, s.configs[id].withdrawSelector);
+                }
             }
         }
 
@@ -264,7 +293,9 @@ contract AllocatorFacet {
             uint256 target = (totalCached * uint256(s.targetBps[id])) / LibAllocator.BPS_DENOMINATOR;
             if (currentAssets[i] < target) {
                 uint256 delta = target - currentAssets[i];
-                _dispatchStrategyCall(id, s.configs[id].depositSelector, delta);
+                if (!_dispatchStrategyCall(s.configs[id].depositSelector, delta)) {
+                    emit StrategyRebalanceSkipped(id, s.configs[id].depositSelector);
+                }
             }
         }
 
@@ -357,23 +388,16 @@ contract AllocatorFacet {
         return abi.decode(data, (uint256));
     }
 
-    function _dispatchStrategyCall(bytes32 strategyId, bytes4 selector, uint256 amount) internal {
-        if (selector == bytes4(0)) revert EmptySelector();
-        bytes memory data;
-        if (amount == 0) {
-            data = abi.encodeWithSelector(selector);
-        } else {
-            data = abi.encodeWithSelector(selector, amount);
-        }
-        (bool ok, bytes memory ret) = address(this).call(data);
-        if (!ok) {
-            if (ret.length > 0) {
-                assembly {
-                    revert(add(32, ret), mload(ret))
-                }
-            }
-            revert StrategyCallFailed(strategyId, selector);
-        }
+    /// @dev Self-dispatches a strategy mutator (deposit/withdraw) through the
+    ///      diamond fallback and reports success instead of reverting. Returning
+    ///      false on an unset selector or a failed call lets `rebalance` skip a
+    ///      single misbehaving strategy rather than letting it brick the whole
+    ///      batch; the end-of-rebalance idle-reserve invariant still backstops
+    ///      safety. `amount` is always > 0 here (callers only dispatch a non-zero
+    ///      delta), so the selector is always encoded with the amount argument.
+    function _dispatchStrategyCall(bytes4 selector, uint256 amount) internal returns (bool ok) {
+        if (selector == bytes4(0)) return false;
+        (ok,) = address(this).call(abi.encodeWithSelector(selector, amount));
     }
 
     function _effectiveCap(LibAllocator.AllocatorStorage storage s, bytes32 strategyId) internal view returns (uint16) {
