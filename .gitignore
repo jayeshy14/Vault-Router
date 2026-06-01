@@ -1,6 +1,7 @@
 # Compiler files
 cache/
 out/
+artifacts/
 
 # Ignores development broadcast logs
 !/broadcast
@@ -9,6 +10,7 @@ out/
 
 # Docs
 docs/
+PROJECT_PLAN.md
 
 # Dotenv file
 .env
@@ -19,6 +21,7 @@ docs/
 .vscode/
 .idea/
 .DS_Store
+.claude/
 
 # Foundry
 foundry.lock

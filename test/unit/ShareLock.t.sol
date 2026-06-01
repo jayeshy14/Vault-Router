@@ -74,6 +74,31 @@ contract ShareLockTest is Test {
         LockFacet(address(vault)).setShareLockPeriod(tooLong);
     }
 
+    /// @notice Regression for F01: the lock is armed only when the depositor locks
+    ///         their OWN shares (caller == receiver). A third party naming someone
+    ///         else as receiver must not be able to freeze that account's balance.
+    function test_ThirdPartyDepositDoesNotLockReceiver() public {
+        vm.prank(owner);
+        LockFacet(address(vault)).setShareLockPeriod(PERIOD);
+
+        address attacker = makeAddr("attacker");
+        usdc.mint(attacker, 10 * 1e6);
+        vm.startPrank(attacker);
+        usdc.approve(address(vault), type(uint256).max);
+        vault.deposit(10 * 1e6, alice); // caller (attacker) != receiver (alice)
+        vm.stopPrank();
+
+        // Alice's lock must NOT be armed by someone else.
+        assertEq(LockFacet(address(vault)).lockedUntil(alice), 0, "third-party deposit must not lock the receiver");
+
+        // And alice can immediately move the shares she received.
+        uint256 bal = vault.balanceOf(alice);
+        assertGt(bal, 0, "alice received shares");
+        vm.prank(alice);
+        vault.transfer(bob, bal);
+        assertEq(vault.balanceOf(bob), bal, "alice freely moved her unlocked shares");
+    }
+
     function test_SetShareLockPeriod_RevertsForNonOwner() public {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(LibDiamond.NotContractOwner.selector, alice, owner));

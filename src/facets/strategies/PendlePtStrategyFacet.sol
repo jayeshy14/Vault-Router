@@ -272,34 +272,40 @@ contract PendlePtStrategyFacet {
         if (netPtOut == 0) revert PendleDepositFailed(netPtOut);
     }
 
-    /// @notice Return `amount` of underlying from the Pendle position to the vault.
-    /// @dev Routes through the appropriate path depending on maturity:
-    ///      - Pre-maturity:  sells PT on the Pendle AMM via swapExactPtForToken.
-    ///      - Post-maturity: redeems PT at face value via redeemPyToToken.
-    ///
-    ///      `amount` is treated as the PT quantity to liquidate (face value units).
-    ///      The underlying received may be slightly less pre-maturity due to
-    ///      the AMM discount; post-maturity it is 1:1.
-    /// @param amount PT quantity to liquidate (denominated in underlying units).
-    function pendleWithdraw(uint256 amount) external {
+    /// @notice Liquidate enough of the Pendle position to return `assetAmount` of
+    ///         the underlying asset to the vault.
+    /// @dev `assetAmount` is denominated in the UNDERLYING ASSET — matching the
+    ///      rebalance delta the allocator computes (asset units) and the units
+    ///      `pendleDeposit` consumes — NOT in PT. It is converted to a PT quantity
+    ///      at the oracle mark (pre-maturity) or 1:1 face value (post-maturity)
+    ///      and capped at the held PT balance, so an over-large request liquidates
+    ///      the whole position instead of reverting. Routes:
+    ///      - Pre-maturity:  swapExactPtForToken (sell PT on the AMM, oracle-bounded).
+    ///      - Post-maturity: redeemPyToToken     (burn PT 1:1, hard 99% dust bound).
+    ///      The underlying received may be slightly less than `assetAmount`
+    ///      pre-maturity due to AMM execution; post-maturity it is ~1:1.
+    /// @param assetAmount Target underlying amount to free, in asset units.
+    function pendleWithdraw(uint256 assetAmount) external {
         LibDiamond.enforceIsSelf();
         PendleStorage storage s = _ps();
         if (address(s.router) == address(0)) revert PendleNotConfigured();
 
         uint256 ptBalance = s.pt.balanceOf(address(this));
-        if (amount > ptBalance) revert PendleInsufficientPt(amount, ptBalance);
+        if (ptBalance == 0) revert PendleInsufficientPt(assetAmount, 0);
 
         IERC20 underlying = IERC20(IERC4626(address(this)).asset());
-
-        IERC20(address(s.pt)).forceApprove(address(s.router), amount);
-
         uint256 received;
 
         if (s.pt.isExpired()) {
-            // Post-maturity: PT redeems 1:1. minTokenOut = 99% (dust tolerance).
+            // Post-maturity: PT redeems 1:1 for the asset (shared decimals), so the
+            // requested asset amount maps directly to a PT quantity. Cap at the
+            // balance: an over-large request liquidates the whole position.
+            uint256 ptAmount = assetAmount > ptBalance ? ptBalance : assetAmount;
+            IERC20(address(s.pt)).forceApprove(address(s.router), ptAmount);
+
             IPendleRouter.TokenOutput memory output = IPendleRouter.TokenOutput({
                 tokenOut: address(underlying),
-                minTokenOut: amount * 99 / 100,
+                minTokenOut: ptAmount * 99 / 100,
                 tokenRedeemSy: address(underlying),
                 pendleSwap: address(0),
                 swapData: IPendleRouter.SwapData({
@@ -308,18 +314,24 @@ contract PendlePtStrategyFacet {
             });
 
             // redeemPyToToken burns PT (YT is implicitly 0 post-maturity).
-            (received,) = s.router.redeemPyToToken(address(this), s.pt.YT(), amount, output);
+            (received,) = s.router.redeemPyToToken(address(this), s.pt.YT(), ptAmount, output);
         } else {
-            // Pre-maturity: sell PT on the Pendle AMM. Mandatory oracle — derive
-            // minTokenOut from the mark (PT->asset rate, haircut by slippage) so
-            // the router enforces the bound. Refuse to sell unpriced rather than
-            // run with minTokenOut = 0 (fully sandwichable). Post-maturity redeem
-            // below needs no oracle: it is 1:1 with a hard 99% dust bound.
+            // Pre-maturity: sell PT on the Pendle AMM. Mandatory oracle — convert
+            // the requested asset value into a PT quantity at the mark, cap at the
+            // balance, and derive minTokenOut from the PT actually being sold
+            // (haircut by slippage). Refuse to sell unpriced rather than run with
+            // minTokenOut = 0 (fully sandwichable).
             if (address(s.oracle) == address(0)) revert PendleOracleRequired();
             uint256 rate = s.oracle.getPtToAssetRate(s.market, s.twapDuration);
             if (rate == 0) revert PendleOracleRequired();
-            uint256 expected = amount * rate / 1e18;
+
+            uint256 ptAmount = assetAmount * 1e18 / rate;
+            if (ptAmount > ptBalance) ptAmount = ptBalance;
+
+            uint256 expected = ptAmount * rate / 1e18;
             uint256 minTokenOut = expected * (PENDLE_BPS - _maxSlippageBps(s)) / PENDLE_BPS;
+
+            IERC20(address(s.pt)).forceApprove(address(s.router), ptAmount);
 
             IPendleRouter.TokenOutput memory output = IPendleRouter.TokenOutput({
                 tokenOut: address(underlying),
@@ -333,10 +345,10 @@ contract PendlePtStrategyFacet {
 
             IPendleRouter.LimitOrderData memory limit;
 
-            (received,,) = s.router.swapExactPtForToken(address(this), s.market, amount, output, limit);
+            (received,,) = s.router.swapExactPtForToken(address(this), s.market, ptAmount, output, limit);
         }
 
-        if (received == 0) revert PendleWithdrawFailed(amount, received);
+        if (received == 0) revert PendleWithdrawFailed(assetAmount, received);
     }
 
     /// @notice No-op. PT yield accrues entirely to face value at maturity —

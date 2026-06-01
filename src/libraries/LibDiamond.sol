@@ -23,6 +23,10 @@ library LibDiamond {
         address[] facetAddresses;
         mapping(bytes4 => bool) supportedInterfaces;
         address contractOwner;
+        // Two-step ownership: the address nominated by `transferOwnership` that
+        // must call `acceptOwnership` to take over. Appended last to preserve the
+        // existing storage layout.
+        address pendingOwner;
     }
 
     error NotContractOwner(address caller, address expected);
@@ -49,6 +53,7 @@ library LibDiamond {
     }
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
 
     function setContractOwner(address _newOwner) internal {
         DiamondStorage storage ds = diamondStorage();
@@ -59,6 +64,29 @@ library LibDiamond {
 
     function contractOwner() internal view returns (address contractOwner_) {
         contractOwner_ = diamondStorage().contractOwner;
+    }
+
+    /// @notice The address nominated to take ownership via the two-step transfer.
+    function pendingOwner() internal view returns (address pendingOwner_) {
+        pendingOwner_ = diamondStorage().pendingOwner;
+    }
+
+    /// @notice Nominate `_pendingOwner` for ownership (step 1). Setting it to
+    ///         address(0) cancels a pending transfer.
+    function setPendingOwner(address _pendingOwner) internal {
+        diamondStorage().pendingOwner = _pendingOwner;
+        emit OwnershipTransferStarted(diamondStorage().contractOwner, _pendingOwner);
+    }
+
+    /// @notice Promote the pending owner to owner (step 2) and clear the
+    ///         nomination. Caller authorization is enforced by the facet.
+    function acceptPendingOwner() internal returns (address newOwner) {
+        DiamondStorage storage ds = diamondStorage();
+        newOwner = ds.pendingOwner;
+        ds.pendingOwner = address(0);
+        address previousOwner = ds.contractOwner;
+        ds.contractOwner = newOwner;
+        emit OwnershipTransferred(previousOwner, newOwner);
     }
 
     function enforceIsContractOwner() internal view {

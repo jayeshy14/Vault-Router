@@ -150,7 +150,7 @@ contract MorphoStrategyTest is Test {
         );
     }
 
-    function test_Deposit_RevertsOnSlippage() public {
+    function test_Deposit_SkippedOnSlippage() public {
         _configure();
         _register();
         uint256 amount = 1000 * 1e6;
@@ -159,15 +159,15 @@ contract MorphoStrategyTest is Test {
         _setSingleAllocation(MORPHO_ID, 10_000);
         vm.roll(block.number + 1);
 
-        // The whole rebalance deposit is `amount` (100% of NAV); previewDeposit
-        // on the empty vault is the value the facet sees, and MorphoSlippage
-        // bubbles up through the allocator's self-dispatch.
-        uint256 expected = morphoVault.previewDeposit(amount);
-        uint256 received = (expected * (10_000 - 100)) / 10_000;
-
+        // MorphoSlippage bubbles up through the allocator's self-dispatch, where
+        // F05 turns it into a per-strategy SKIP rather than a whole-rebalance
+        // revert: the funds stay idle and the skip is recorded.
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit AllocatorFacet.StrategyRebalanceSkipped(MORPHO_ID, MorphoStrategyFacet.morphoDeposit.selector);
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(MorphoStrategyFacet.MorphoSlippage.selector, expected, received));
         AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(usdc.balanceOf(address(vault)), amount, "funds stayed idle; over-slippage Morpho deposit skipped");
     }
 
     function test_Withdraw_ReturnsUnderlyingToDiamond() public {

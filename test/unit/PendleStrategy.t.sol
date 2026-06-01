@@ -186,7 +186,12 @@ contract PendleStrategyTest is Test {
         assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), expectedPt, "marked at par == face");
     }
 
-    function test_Deposit_RevertsWhenExpired() public {
+    // F05: a strategy's protective deposit refusal (expired market / missing
+    // oracle / slippage breach) must SKIP that strategy, not brick the whole
+    // rebalance. The protection still works — the funds simply stay idle and a
+    // StrategyRebalanceSkipped event records the skip.
+
+    function test_Deposit_SkippedWhenExpired() public {
         _configureWithOracle();
         _register();
         usdc.mint(address(vault), 1000 * 1e6);
@@ -194,26 +199,34 @@ contract PendleStrategyTest is Test {
         vm.warp(expiry); // at/after expiry the market is closed for buys
         vm.roll(block.number + 1);
 
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit AllocatorFacet.StrategyRebalanceSkipped(PENDLE_ID, PendlePtStrategyFacet.pendleDeposit.selector);
         vm.prank(owner);
-        vm.expectRevert(PendlePtStrategyFacet.PendleMarketExpired.selector);
         AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(usdc.balanceOf(address(vault)), 1000 * 1e6, "funds stayed idle; expired-market deposit skipped");
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 0, "no PT bought");
     }
 
-    function test_Deposit_RevertsWhenNoOracle() public {
+    function test_Deposit_SkippedWhenNoOracle() public {
         // Mandatory oracle: a deposit on an unpriced market is refused outright
-        // rather than swapped with minOut = 0.
+        // rather than swapped with minOut = 0 — and the refusal skips, not bricks.
         _configure(); // router/market/pt, but NO oracle
         _register();
         usdc.mint(address(vault), 1000 * 1e6);
         _setSingleAllocation(PENDLE_ID, 10_000);
         vm.roll(block.number + 1);
 
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit AllocatorFacet.StrategyRebalanceSkipped(PENDLE_ID, PendlePtStrategyFacet.pendleDeposit.selector);
         vm.prank(owner);
-        vm.expectRevert(PendlePtStrategyFacet.PendleOracleRequired.selector);
         AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(usdc.balanceOf(address(vault)), 1000 * 1e6, "funds stayed idle; unpriced deposit skipped");
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 0, "no PT bought");
     }
 
-    function test_Deposit_RevertsWhenFillBelowOracleSlippageBound() public {
+    function test_Deposit_SkippedWhenFillBelowOracleSlippageBound() public {
         _configure();
         _setOracle(0.95e18); // oracle: 1 PT = 0.95 USDC -> a buy should yield ~1.053x PT
         _register();
@@ -222,10 +235,15 @@ contract PendleStrategyTest is Test {
         vm.roll(block.number + 1);
 
         // Router fills at par (1000 PT) — ~5% worse than the oracle-implied amount,
-        // beyond the default 1% tolerance. The router enforces our derived minPtOut.
+        // beyond the default 1% tolerance. The router enforces our derived minPtOut,
+        // so the deposit reverts internally and rebalance skips it.
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit AllocatorFacet.StrategyRebalanceSkipped(PENDLE_ID, PendlePtStrategyFacet.pendleDeposit.selector);
         vm.prank(owner);
-        vm.expectRevert("MockPendle: minPtOut");
         AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(usdc.balanceOf(address(vault)), 1000 * 1e6, "funds stayed idle; over-slippage buy skipped");
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 0, "no PT bought");
     }
 
     function test_Deposit_SucceedsWhenFillWithinOracleSlippageBound() public {
@@ -282,6 +300,33 @@ contract PendleStrategyTest is Test {
         assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 600 * 1e6, "remaining position reported");
     }
 
+    /// @notice Regression for F03: rebalance computes withdrawal deltas in ASSET
+    ///         units, and pendleWithdraw must convert them to a PT quantity at the
+    ///         oracle mark — NOT treat the asset delta as a raw PT amount. At a
+    ///         non-par mark the two diverge, which is where the original bug bit.
+    function test_Withdraw_PreMaturity_AssetDenominatedAtDiscount() public {
+        _configureWithOracle();
+        _register();
+        _deployAll(1000 * 1e6); // 1000 PT bought at par
+
+        // Mark the live position down to a 0.8 rate: 1000 PT now == 800 asset.
+        oracle.setRate(0.8e18);
+        assertEq(PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 800 * 1e6, "PT marked to 800 asset");
+
+        // Target the Pendle sleeve at 50% of NAV. NAV == 800 (idle 0 + pendle 800),
+        // so target == 400 and the allocator asks to withdraw 400 of ASSET value.
+        // Correct behavior: liquidate 400 / 0.8 == 500 PT (the old bug sold 400).
+        _setSingleAllocation(PENDLE_ID, 5000);
+        vm.roll(block.number + 1);
+        vm.prank(owner);
+        AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(pt.balanceOf(address(vault)), 500 * 1e6, "liquidated asset-denominated PT (400 / 0.8)");
+        assertEq(
+            PendlePtStrategyFacet(address(vault)).pendleTotalAssets(), 400 * 1e6, "Pendle sleeve converged to target"
+        );
+    }
+
     function test_Withdraw_PostMaturity_RedeemsAtFaceValue() public {
         _configureWithOracle();
         _register();
@@ -299,21 +344,26 @@ contract PendleStrategyTest is Test {
         assertEq(pt.balanceOf(address(vault)), 0, "PT fully burned");
     }
 
-    function test_Withdraw_PreMaturity_RevertsWhenNoOracle() public {
+    function test_Withdraw_PreMaturity_SkippedWhenNoOracle() public {
         // Mandatory oracle on the pre-maturity sell. Build a PT position directly
-        // (no oracle) so we can reach the sell path, then rebalance to 0%.
+        // (no oracle) so we can reach the sell path, then rebalance to 0%. The
+        // unpriced-sell refusal skips the strategy rather than bricking rebalance.
         _configure(); // no oracle
         _register();
         pt.mint(address(vault), 1000 * 1e6);
         _setSingleAllocation(PENDLE_ID, 0);
         vm.roll(block.number + 1);
 
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit AllocatorFacet.StrategyRebalanceSkipped(PENDLE_ID, PendlePtStrategyFacet.pendleWithdraw.selector);
         vm.prank(owner);
-        vm.expectRevert(PendlePtStrategyFacet.PendleOracleRequired.selector);
         AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(pt.balanceOf(address(vault)), 1000 * 1e6, "PT retained; unpriced sell skipped");
+        assertEq(usdc.balanceOf(address(vault)), 0, "no underlying freed");
     }
 
-    function test_Withdraw_RevertsWhenAmmHaircutExceedsSlippageBound() public {
+    function test_Withdraw_SkippedWhenAmmHaircutExceedsSlippageBound() public {
         _configureWithOracle(); // par mark: minTokenOut = 99% of PT sold
         _register();
         _deployAll(1000 * 1e6);
@@ -321,9 +371,14 @@ contract PendleStrategyTest is Test {
         router.setWithdrawHaircutBps(500); // 5% AMM haircut, beyond the 1% tolerance
         _setSingleAllocation(PENDLE_ID, 6000); // sell 400
         vm.roll(block.number + 1);
+
+        vm.expectEmit(true, false, false, true, address(vault));
+        emit AllocatorFacet.StrategyRebalanceSkipped(PENDLE_ID, PendlePtStrategyFacet.pendleWithdraw.selector);
         vm.prank(owner);
-        vm.expectRevert("MockPendle: minTokenOut");
         AllocatorFacet(address(vault)).rebalance();
+
+        assertEq(pt.balanceOf(address(vault)), 1000 * 1e6, "PT retained; over-slippage sell skipped");
+        assertEq(usdc.balanceOf(address(vault)), 0, "no underlying freed");
     }
 
     function test_Withdraw_SucceedsWhenHaircutWithinSlippageBound() public {

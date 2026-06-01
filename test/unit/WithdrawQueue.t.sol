@@ -15,6 +15,7 @@ import { DiamondLoupeFacet } from "../../src/facets/DiamondLoupeFacet.sol";
 import { OwnershipFacet } from "../../src/facets/OwnershipFacet.sol";
 import { AllocatorFacet } from "../../src/facets/AllocatorFacet.sol";
 import { WithdrawQueueFacet } from "../../src/facets/WithdrawQueueFacet.sol";
+import { LockFacet } from "../../src/facets/LockFacet.sol";
 import { LibAllocator } from "../../src/libraries/LibAllocator.sol";
 import { LibWithdrawQueue } from "../../src/libraries/LibWithdrawQueue.sol";
 import { LibRoles } from "../../src/libraries/LibRoles.sol";
@@ -243,6 +244,51 @@ contract WithdrawQueueTest is Test {
     }
 
     // -----------------------------------------------------------------------
+    // Griefing regression (F01): an attacker must not be able to brick the queue
+    // by arming the share lock on the vault's own escrow address.
+    // -----------------------------------------------------------------------
+
+    function test_Griefing_DepositToVaultCannotBrickQueue() public {
+        // Enable the anti-MEV share lock — the precondition the old bug needed.
+        vm.prank(owner);
+        LockFacet(address(vault)).setShareLockPeriod(1 hours);
+
+        // Alice escrows half her shares for an async exit (her setUp deposit
+        // predates the lock, so her shares are unlocked and movable).
+        uint256 shares = vault.balanceOf(alice) / 2;
+        vm.prank(alice);
+        uint256 id = vault.requestWithdraw(shares, alice);
+
+        // Attacker attempts the brick: a 1-wei deposit naming the VAULT as
+        // receiver, trying to arm lockedUntil[address(this)] so the escrow
+        // _burn/_transfer in fulfill/cancel revert SharesLocked.
+        address attacker = makeAddr("attacker");
+        usdc.mint(attacker, 1);
+        vm.startPrank(attacker);
+        usdc.approve(address(vault), 1);
+        vault.deposit(1, address(vault));
+        vm.stopPrank();
+
+        // The vault address must remain unlocked (caller != receiver ⇒ not armed).
+        assertEq(
+            LockFacet(address(vault)).lockedUntil(address(vault)), 0, "vault escrow address must never be lock-armed"
+        );
+
+        // Fulfill still works — the queue is not bricked.
+        vm.prank(owner);
+        vault.fulfillWithdraw(id);
+        assertGt(usdc.balanceOf(alice), 0, "curator fulfilled despite griefing attempt");
+
+        // And the cancel path is not bricked either.
+        uint256 rest = vault.balanceOf(alice);
+        vm.prank(alice);
+        uint256 id2 = vault.requestWithdraw(rest, alice);
+        vm.prank(alice);
+        vault.cancelWithdraw(id2);
+        assertEq(vault.balanceOf(alice), rest, "alice reclaimed escrowed shares via cancel");
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
@@ -273,8 +319,9 @@ contract WithdrawQueueTest is Test {
         AllocatorFacet allocator = new AllocatorFacet();
         MockStrategyFacet mock = new MockStrategyFacet();
         WithdrawQueueFacet queue = new WithdrawQueueFacet();
+        LockFacet lock = new LockFacet();
 
-        IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](6);
+        IDiamond.FacetCut[] memory cuts = new IDiamond.FacetCut[](7);
         cuts[0] = IDiamond.FacetCut({
             facetAddress: address(cut), action: IDiamond.FacetCutAction.Add, functionSelectors: _diamondCutSelectors()
         });
@@ -300,6 +347,9 @@ contract WithdrawQueueTest is Test {
             facetAddress: address(queue),
             action: IDiamond.FacetCutAction.Add,
             functionSelectors: _withdrawQueueSelectors()
+        });
+        cuts[6] = IDiamond.FacetCut({
+            facetAddress: address(lock), action: IDiamond.FacetCutAction.Add, functionSelectors: _lockSelectors()
         });
 
         return new Vault(IERC20(address(usdc)), "Vault Router", "vUSDC", owner, cuts, address(0), "");
@@ -349,5 +399,12 @@ contract WithdrawQueueTest is Test {
         s[0] = WithdrawQueueFacet.nextWithdrawRequestId.selector;
         s[1] = WithdrawQueueFacet.pendingWithdrawShares.selector;
         s[2] = WithdrawQueueFacet.withdrawRequest.selector;
+    }
+
+    function _lockSelectors() internal pure returns (bytes4[] memory s) {
+        s = new bytes4[](3);
+        s[0] = LockFacet.setShareLockPeriod.selector;
+        s[1] = LockFacet.shareLockPeriod.selector;
+        s[2] = LockFacet.lockedUntil.selector;
     }
 }
