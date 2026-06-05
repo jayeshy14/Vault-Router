@@ -1,175 +1,182 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+// // SPDX-License-Identifier: MIT
 
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+// /** 
+//  * This strategy is not complete and is on hold due to swap liquidity venue issues (as Ethena do not
+//  * cover in-house router so need to add external dependencies)
+//  */
 
-import { LibDiamond } from "../../libraries/LibDiamond.sol";
-import { IStakedUSDEV2 } from "../../interfaces/external/IStakedUSDEV2.sol";
-import { ICurvePool } from "../../interfaces/external/ICurvePool.sol";
+// pragma solidity ^0.8.24;
 
-contract EthenaStrategyFacet {
-    using SafeERC20 for IERC20;
+// import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+// import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+// import { IERC4626 } from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
-    /*====errors====*/
+// import { LibDiamond } from "../../libraries/LibDiamond.sol";
+// import { IStakedUSDEV2 } from "../../interfaces/external/IStakedUSDEV2.sol";
+// import { ICurvePool } from "../../interfaces/external/ICurvePool.sol";
 
-    error EthenaUSDENotConfigured();
-    error EthenaSlippageExceeded(uint256 minOut, uint256 received);
-    error EthenaCoinNotInPool(address tokenIn, address tokenOut);
-    error EthenaZeroAddress();
+// contract EthenaStrategyFacet {
+//     using SafeERC20 for IERC20;
 
-    /*====events====*/
+//     /*====errors====*/
 
-    event EthenaSetConfig(address indexed usde, address indexed curvePool, address indexed stakedUSDEV2);
+//     error EthenaUSDENotConfigured();
+//     error EthenaSlippageExceeded(uint256 minOut, uint256 received);
+//     error EthenaCoinNotInPool(address tokenIn, address tokenOut);
+//     error EthenaZeroAddress();
 
-    // erc7201:vaultrouter.strategy.ethena
-    bytes32 internal constant ETHENA_STORAGE_SLOT = 0x0000000000000000000000000000000000000000000000000000000000000000;
+//     /*====events====*/
 
-    struct EthenaStorage {
-        IERC20 usde;
-        ICurvePool curvePool;
-        IStakedUSDEV2 stakedUSDEV2;
-        uint256 maxSlippageBps;
-        uint256 cooldownDuration;
-        /*====only for offchain explicit routing ====*/
-        //mapping (address => bool) allowedRouter;
-        //mapping (address => bool) allowedSpender;
-    }
+//     event EthenaSetConfig(address indexed usde, address indexed curvePool, address indexed stakedUSDEV2);
 
-    function _es() internal pure returns (EthenaStorage storage s) {
-        bytes32 slot = ETHENA_STORAGE_SLOT;
-        assembly {
-            s.slot := slot
-        }
-    }
+//     // erc7201:vaultrouter.strategy.ethena
+//     bytes32 internal constant ETHENA_STORAGE_SLOT = 0x0000000000000000000000000000000000000000000000000000000000000000;
 
-    function ethenaSetConfig(
-        IERC20 usde,
-        ICurvePool curvePool,
-        IStakedUSDEV2 stakedUSDEV2,
-        uint256 maxSlippageBps
-    )
-        external
-    {
-        LibDiamond.enforceIsContractOwner();
-        if (address(usde) == address(0) || address(curvePool) == address(0) || address(stakedUSDEV2) == address(0)) {
-            revert EthenaUSDENotConfigured();
-        }
-        EthenaStorage storage s = _es();
-        s.usde = usde;
-        s.curvePool = curvePool;
-        s.stakedUSDEV2 = stakedUSDEV2;
-        s.maxSlippageBps = maxSlippageBps;
-        emit EthenaSetConfig(address(usde), address(curvePool), address(stakedUSDEV2));
-    }
+//     struct EthenaStorage {
+//         IERC20 usde;
+//         ICurvePool curvePool;
+//         IStakedUSDEV2 stakedUSDEV2;
+//         uint256 maxSlippageBps;
+//         uint256 cooldownDuration;
+//         /*====only for offchain explicit routing ====*/
+//         //mapping (address => bool) allowedRouter;
+//         //mapping (address => bool) allowedSpender;
+//     }
 
-    /*====IEthenaStrategy surface====*/
+//     function _es() internal pure returns (EthenaStorage storage s) {
+//         bytes32 slot = ETHENA_STORAGE_SLOT;
+//         assembly {
+//             s.slot := slot
+//         }
+//     }
 
-    /// @notice Swap `amount` of the vault's underlying (USDC) into USDe and stake
-    ///         it into sUSDe. Driven by the allocator's rebalance with a computed
-    ///         delta, so it deposits exactly `amount` — not the whole balance.
-    function ethenaDeposit(uint256 amount) external {
-        EthenaStorage storage s = _es();
-        if (
-            address(s.usde) == address(0) || address(s.curvePool) == address(0) || address(s.stakedUSDEV2) == address(0)
-        ) {
-            revert EthenaUSDENotConfigured();
-        }
-        if (amount == 0) return;
+//     function ethenaSetConfig(
+//         IERC20 usde,
+//         ICurvePool curvePool,
+//         IStakedUSDEV2 stakedUSDEV2,
+//         uint256 maxSlippageBps
+//     )
+//         external
+//     {
+//         LibDiamond.enforceIsContractOwner();
+//         if (address(usde) == address(0) || address(curvePool) == address(0) || address(stakedUSDEV2) == address(0)) {
+//             revert EthenaUSDENotConfigured();
+//         }
+//         EthenaStorage storage s = _es();
+//         s.usde = usde;
+//         s.curvePool = curvePool;
+//         s.stakedUSDEV2 = stakedUSDEV2;
+//         s.maxSlippageBps = maxSlippageBps;
+//         emit EthenaSetConfig(address(usde), address(curvePool), address(stakedUSDEV2));
+//     }
 
-        address underlying = IERC4626(address(this)).asset(); // USDC (6dec)
+//     /*====IEthenaStrategy surface====*/
 
-        // Par-anchored floor: USDC(6dec) -> USDe(18dec), discounted by slippage.
-        uint256 minUsde = amount * 1e12 * (10_000 - s.maxSlippageBps) / 10_000;
+//     /// @notice Swap `amount` of the vault's underlying (USDC) into USDe and stake
+//     ///         it into sUSDe. Driven by the allocator's rebalance with a computed
+//     ///         delta, so it deposits exactly `amount` — not the whole balance.
+//     function ethenaDeposit(uint256 amount) external {
+//         EthenaStorage storage s = _es();
+//         if (
+//             address(s.usde) == address(0) || address(s.curvePool) == address(0) || address(s.stakedUSDEV2) == address(0)
+//         ) {
+//             revert EthenaUSDENotConfigured();
+//         }
+//         if (amount == 0) return;
 
-        // 1. USDC -> USDe on Curve (slippage enforced inside _swap).
-        uint256 usde = _swap(underlying, address(s.usde), amount, minUsde);
+//         address underlying = IERC4626(address(this)).asset(); // USDC (6dec)
 
-        // 2. Stake USDe -> sUSDe.
-        s.usde.forceApprove(address(s.stakedUSDEV2), usde);
-        s.stakedUSDEV2.deposit(usde, address(this));
-    }
+//         // Par-anchored floor: USDC(6dec) -> USDe(18dec), discounted by slippage.
+//         uint256 minUsde = amount * 1e12 * (10_000 - s.maxSlippageBps) / 10_000;
 
-    /// @notice Position value in underlying (USDC) terms. The facet holds sUSDe,
-    ///         not USDe — value the shares at par and scale 18dec -> 6dec.
-    function ethenaTotalAssets() external view returns (uint256) {
-        EthenaStorage storage s = _es();
-        if (address(s.stakedUSDEV2) == address(0)) revert EthenaZeroAddress();
-        uint256 shares = s.stakedUSDEV2.balanceOf(address(this));
-        if (shares == 0) revert EthenaZeroAddress();
-        return s.stakedUSDEV2.convertToAssets(shares) / 1e12; // USDe(18) -> USDC(6)
-    }
+//         // 1. USDC -> USDe on Curve (slippage enforced inside _swap).
+//         uint256 usde = _swap(underlying, address(s.usde), amount, minUsde);
 
-    function ethenaWithdraw() external {
+//         // 2. Stake USDe -> sUSDe.
+//         s.usde.forceApprove(address(s.stakedUSDEV2), usde);
+//         s.stakedUSDEV2.deposit(usde, address(this));
+//     }
 
-        //withdraw is gated on the core protocol side
-        //going asynchronous has lots of variables included and is practically complex
+//     /// @notice Position value in underlying (USDC) terms. The facet holds sUSDe,
+//     ///         not USDe — value the shares at par and scale 18dec -> 6dec.
+//     function ethenaTotalAssets() external view returns (uint256) {
+//         EthenaStorage storage s = _es();
+//         if (address(s.stakedUSDEV2) == address(0)) revert EthenaZeroAddress();
+//         uint256 shares = s.stakedUSDEV2.balanceOf(address(this));
+//         if (shares == 0) revert EthenaZeroAddress();
+//         return s.stakedUSDEV2.convertToAssets(shares) / 1e12; // USDe(18) -> USDC(6)
+//     }
 
-        }
+//     function ethenaWithdraw() external {
 
-    /*=== cooldown ===*/
+//         //withdraw is gated on the core protocol side
+//         //going asynchronous has lots of variables included and is practically complex
 
-    /*==== internal swap helper — Curve only, par-floor enforced by caller ====*/
+//         }
 
-    /// @dev Executes tokenIn -> tokenOut on the configured Curve StableSwap pool.
-    ///      `minOut` is the caller-supplied par-anchored floor; this function is
-    ///      pure execution and holds no slippage policy of its own. Returns the
-    ///      amount of tokenOut actually received, measured by balance delta so we
-    ///      never trust the pool's return value. Internal: the only callers are
-    ///      ethenaDeposit / ethenaWithdraw, both reached via the gated rebalance.
-    function _swap(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 minOut
-    )
-        internal
-        returns (uint256 received)
-    {
-        if (amountIn == 0) return 0;
-        ICurvePool pool = _es().curvePool;
-        if (address(pool) == address(0)) revert EthenaUSDENotConfigured();
+//     /*=== cooldown ===*/
 
-        (int128 i, int128 j) = _coinIndices(pool, tokenIn, tokenOut);
+//     /*==== internal swap helper — Curve only, par-floor enforced by caller ====*/
 
-        uint256 balBefore = IERC20(tokenOut).balanceOf(address(this));
+//     /// @dev Executes tokenIn -> tokenOut on the configured Curve StableSwap pool.
+//     ///      `minOut` is the caller-supplied par-anchored floor; this function is
+//     ///      pure execution and holds no slippage policy of its own. Returns the
+//     ///      amount of tokenOut actually received, measured by balance delta so we
+//     ///      never trust the pool's return value. Internal: the only callers are
+//     ///      ethenaDeposit / ethenaWithdraw, both reached via the gated rebalance.
+//     function _swap(
+//         address tokenIn,
+//         address tokenOut,
+//         uint256 amountIn,
+//         uint256 minOut
+//     )
+//         internal
+//         returns (uint256 received)
+//     {
+//         if (amountIn == 0) return 0;
+//         ICurvePool pool = _es().curvePool;
+//         if (address(pool) == address(0)) revert EthenaUSDENotConfigured();
 
-        IERC20(tokenIn).forceApprove(address(pool), amountIn);
-        pool.exchange(i, j, amountIn, minOut, address(this));
+//         (int128 i, int128 j) = _coinIndices(pool, tokenIn, tokenOut);
 
-        received = IERC20(tokenOut).balanceOf(address(this)) - balBefore;
-        if (received < minOut) revert EthenaSlippageExceeded(minOut, received);
-    }
+//         uint256 balBefore = IERC20(tokenOut).balanceOf(address(this));
 
-    /// @dev Resolve Curve coin indices for a token pair by scanning `coins()`.
-    ///      Curve's DynArray getter reverts past the last index, so we try/catch
-    ///      and stop at the first out-of-range read. Pools here hold ≤ 8 coins.
-    function _coinIndices(
-        ICurvePool pool,
-        address tokenIn,
-        address tokenOut
-    )
-        internal
-        view
-        returns (int128 inIdx, int128 outIdx)
-    {
-        bool foundIn;
-        bool foundOut;
-        for (uint256 k; k < 8; k++) {
-            try pool.coins(k) returns (address c) {
-                if (c == tokenIn) {
-                    inIdx = int128(uint128(k));
-                    foundIn = true;
-                }
-                if (c == tokenOut) {
-                    outIdx = int128(uint128(k));
-                    foundOut = true;
-                }
-            } catch {
-                break;
-            }
-        }
-        if (!foundIn || !foundOut) revert EthenaCoinNotInPool(tokenIn, tokenOut);
-    }
-}
+//         IERC20(tokenIn).forceApprove(address(pool), amountIn);
+//         pool.exchange(i, j, amountIn, minOut, address(this));
+
+//         received = IERC20(tokenOut).balanceOf(address(this)) - balBefore;
+//         if (received < minOut) revert EthenaSlippageExceeded(minOut, received);
+//     }
+
+//     /// @dev Resolve Curve coin indices for a token pair by scanning `coins()`.
+//     ///      Curve's DynArray getter reverts past the last index, so we try/catch
+//     ///      and stop at the first out-of-range read. Pools here hold ≤ 8 coins.
+//     function _coinIndices(
+//         ICurvePool pool,
+//         address tokenIn,
+//         address tokenOut
+//     )
+//         internal
+//         view
+//         returns (int128 inIdx, int128 outIdx)
+//     {
+//         bool foundIn;
+//         bool foundOut;
+//         for (uint256 k; k < 8; k++) {
+//             try pool.coins(k) returns (address c) {
+//                 if (c == tokenIn) {
+//                     inIdx = int128(uint128(k));
+//                     foundIn = true;
+//                 }
+//                 if (c == tokenOut) {
+//                     outIdx = int128(uint128(k));
+//                     foundOut = true;
+//                 }
+//             } catch {
+//                 break;
+//             }
+//         }
+//         if (!foundIn || !foundOut) revert EthenaCoinNotInPool(tokenIn, tokenOut);
+//     }
+// }
+
