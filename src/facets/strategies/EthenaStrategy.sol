@@ -1,6 +1,6 @@
 // // SPDX-License-Identifier: MIT
 
-// /** 
+// /**
 //  * This strategy is not complete and is on hold due to swap liquidity venue issues (as Ethena do not
 //  * cover in-house router so need to add external dependencies)
 //  */
@@ -30,7 +30,8 @@
 //     event EthenaSetConfig(address indexed usde, address indexed curvePool, address indexed stakedUSDEV2);
 
 //     // erc7201:vaultrouter.strategy.ethena
-//     bytes32 internal constant ETHENA_STORAGE_SLOT = 0x0000000000000000000000000000000000000000000000000000000000000000;
+//     bytes32 internal constant ETHENA_STORAGE_SLOT =
+// 0x0000000000000000000000000000000000000000000000000000000000000000;
 
 //     struct EthenaStorage {
 //         IERC20 usde;
@@ -78,8 +79,8 @@
 //     function ethenaDeposit(uint256 amount) external {
 //         EthenaStorage storage s = _es();
 //         if (
-//             address(s.usde) == address(0) || address(s.curvePool) == address(0) || address(s.stakedUSDEV2) == address(0)
-//         ) {
+//             address(s.usde) == address(0) || address(s.curvePool) == address(0) || address(s.stakedUSDEV2) ==
+// address(0) ) {
 //             revert EthenaUSDENotConfigured();
 //         }
 //         if (amount == 0) return;
