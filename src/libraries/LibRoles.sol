@@ -15,6 +15,8 @@ import { LibDiamond } from "./LibDiamond.sol";
 ///      table, or any other facet's namespace.
 ///      keccak256(abi.encode(uint256(keccak256("vaultrouter.storage.roles")) - 1)) & ~bytes32(uint256(0xff))
 library LibRoles {
+    /// @dev Precomputed erc7201("vaultrouter.storage.roles"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant ROLES_STORAGE_SLOT = 0x72812988d549c1f62ecdf8218c688f5047bef5695066f17d8d1060ecc0962300;
 
     error NotCurator(address caller);

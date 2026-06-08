@@ -21,7 +21,8 @@ pragma solidity ^0.8.24;
 ///      Storage location:
 ///      keccak256(abi.encode(uint256(keccak256("vaultrouter.storage.withdrawqueue")) - 1)) & ~bytes32(uint256(0xff))
 library LibWithdrawQueue {
-    /// @dev erc7201:vaultrouter.storage.withdrawqueue
+    /// @dev Precomputed erc7201("vaultrouter.storage.withdrawqueue"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant WITHDRAW_QUEUE_STORAGE_SLOT =
         0x3d5a7857d3d4e9dbe18f39f41bd8fd54a510e284a7d9a4464e9cc2159e9f9100;
 

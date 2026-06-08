@@ -23,7 +23,8 @@ library LibLock {
     /// @notice Reverted when shares are moved before their lock window elapses.
     error SharesLocked(address account, uint256 lockedUntil);
 
-    /// @dev erc7201:vaultrouter.storage.lock
+    /// @dev Precomputed erc7201("vaultrouter.storage.lock"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant LOCK_STORAGE_SLOT = 0x98796fb009fa2d66e5ccc76be36c65ba72c5853e7fe1b4f23987457f018b5800;
 
     /// @custom:storage-location erc7201:vaultrouter.storage.lock

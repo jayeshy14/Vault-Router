@@ -7,6 +7,8 @@ pragma solidity ^0.8.24;
 ///         LibDiamond's selector table.
 /// @dev keccak256(abi.encode(uint256(keccak256("vaultrouter.storage.allocator")) - 1)) & ~bytes32(uint256(0xff))
 library LibAllocator {
+    /// @dev Precomputed erc7201("vaultrouter.storage.allocator"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant ALLOCATOR_STORAGE_SLOT =
         0x2f4e489fd9fdb4c68f60ae0ec4a19ea4d9796e41932a74c08f691957213bd500;
 

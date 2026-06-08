@@ -37,12 +37,13 @@ contract MorphoStrategyFacet {
     /// @param vault The Metamorpho ERC4626 vault now active for this strategy.
     event MorphoVaultSet(IMorpho indexed vault);
 
-    /// @notice EIP-7201 namespaced storage slot for the Morpho strategy state.
-    /// @dev erc7201:vaultrouter.strategy.morpho
+    /// @dev Precomputed erc7201("vaultrouter.strategy.morpho"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant MORPHO_STORAGE_SLOT = 0xf4b3fd2d8603f5a74e31f8c3250c4c70408eaa33a47a7d4535036bfa6799e900;
 
     /// @notice Storage layout for the Morpho strategy facet.
     /// @dev `vault` is the configured Metamorpho ERC4626 vault.
+    /// @custom:storage-location erc7201:vaultrouter.strategy.morpho
     struct MorphoStorage {
         IMorpho vault;
     }
