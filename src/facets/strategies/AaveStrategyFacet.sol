@@ -24,9 +24,11 @@ contract AaveStrategyFacet {
 
     event AaveConfigSet(IAavePool indexed pool, IERC20 indexed aToken);
 
-    /// @dev erc7201:vaultrouter.strategy.aave
+    /// @dev Precomputed erc7201("vaultrouter.strategy.aave"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant AAVE_STORAGE_SLOT = 0x340080245a7d3e67835fb5055646777827d09fc7212fda4d8d724367e1215700;
 
+    /// @custom:storage-location erc7201:vaultrouter.strategy.aave
     struct AaveStorage {
         IAavePool pool;
         IERC20 aToken;

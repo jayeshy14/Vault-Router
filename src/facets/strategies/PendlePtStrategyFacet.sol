@@ -88,7 +88,8 @@ contract PendlePtStrategyFacet {
     // Storage
     // -----------------------------------------------------------------------
 
-    /// @dev erc7201:vaultrouter.strategy.pendle
+    /// @dev Precomputed erc7201("vaultrouter.strategy.pendle"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant PENDLE_STORAGE_SLOT = 0xb0e016db49ce2cfbe35770c2200cbf5f1a9b502bca57dbaaddf328cb9e0cef00;
 
     /// @dev Basis-points denominator.
@@ -97,6 +98,7 @@ contract PendlePtStrategyFacet {
     /// @dev Slippage tolerance (bps) used when none is explicitly configured: 1%.
     uint16 internal constant DEFAULT_MAX_SLIPPAGE_BPS = 100;
 
+    /// @custom:storage-location erc7201:vaultrouter.strategy.pendle
     struct PendleStorage {
         /// @notice PendleRouterV4 — handles all swap and redemption paths.
         IPendleRouter router;

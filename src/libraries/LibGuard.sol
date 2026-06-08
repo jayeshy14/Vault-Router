@@ -22,6 +22,8 @@ library LibGuard {
     ///      share-price math below never drift apart.
     uint8 internal constant DECIMALS_OFFSET = 6;
 
+    /// @dev Precomputed erc7201("vaultrouter.storage.guard"):
+    ///      keccak256(abi.encode(uint256(keccak256(id)) - 1)) & ~bytes32(uint256(0xff))
     bytes32 internal constant GUARD_STORAGE_SLOT = 0x2e670cc2b429ff4c75b2b5ce7b57521bb8c3d00aaafa77116d454e88d382a900;
 
     /// @notice Reverted on any deposit/withdraw while the breaker is latched.
