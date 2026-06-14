@@ -12,6 +12,7 @@ import { LibWithdrawQueue } from "../../src/libraries/LibWithdrawQueue.sol";
 import { AaveStrategyFacet } from "../../src/facets/strategies/AaveStrategyFacet.sol";
 import { MorphoStrategyFacet } from "../../src/facets/strategies/MorphoStrategyFacet.sol";
 import { PendlePtStrategyFacet } from "../../src/facets/strategies/PendlePtStrategyFacet.sol";
+import { CompoundV3StrategyFacet } from "../../src/facets/strategies/CompoundV3StrategyFacet.sol";
 
 // The strategy facets keep their slot constant `internal` at contract scope, which is not
 // reachable via qualified access, so a thin heir exposes it for the invariant check.
@@ -30,6 +31,12 @@ contract MorphoExposer is MorphoStrategyFacet {
 contract PendleExposer is PendlePtStrategyFacet {
     function exposedSlot() external pure returns (bytes32) {
         return PENDLE_STORAGE_SLOT;
+    }
+}
+
+contract CompoundExposer is CompoundV3StrategyFacet {
+    function exposedSlot() external pure returns (bytes32) {
+        return COMPOUND_STORAGE_SLOT;
     }
 }
 
@@ -58,5 +65,6 @@ contract StorageNamespacesTest is Test {
         assertEq(new AaveExposer().exposedSlot(), _erc7201("vaultrouter.strategy.aave"), "aave");
         assertEq(new MorphoExposer().exposedSlot(), _erc7201("vaultrouter.strategy.morpho"), "morpho");
         assertEq(new PendleExposer().exposedSlot(), _erc7201("vaultrouter.strategy.pendle"), "pendle");
+        assertEq(new CompoundExposer().exposedSlot(), _erc7201("vaultrouter.strategy.compound"), "compound");
     }
 }
